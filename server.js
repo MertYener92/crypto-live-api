@@ -12,22 +12,21 @@ async function loadPrices() {
   try {
 
     const response = await fetch(
-  'https://api.binance.com/api/v3/ticker/price'
-);
+      'https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&per_page=100&page=1'
+    );
 
     const data = await response.json();
-    console.log(data);
 
     const filtered = {};
 
     data.forEach((coin) => {
 
-      if (coin.symbol.endsWith('USDT')) {
-
-        filtered[coin.symbol] = {
-  price: coin.price,
-};
-      }
+      filtered[coin.symbol.toUpperCase()] = {
+        price: coin.current_price,
+        change: coin.price_change_percentage_24h,
+        image: coin.image,
+        name: coin.name,
+      };
     });
 
     prices = filtered;
