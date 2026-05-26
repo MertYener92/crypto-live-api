@@ -27,12 +27,24 @@ ws.on('open', () => {
     channels: [
       {
         name: 'ticker',
+
         product_ids: [
+
           'BTC-USD',
           'ETH-USD',
           'SOL-USD',
           'BNB-USD',
-          'XRP-USD'
+          'XRP-USD',
+          'DOGE-USD',
+          'ADA-USD',
+          'AVAX-USD',
+          'LINK-USD',
+          'DOT-USD',
+          'LTC-USD',
+          'TRX-USD',
+          'MATIC-USD',
+          'SHIB-USD'
+
         ]
       }
     ]
@@ -43,84 +55,56 @@ ws.on('message', (msg) => {
 
   const data = JSON.parse(msg);
 
-  if (
-    data.type === 'ticker'
-  ) {
+  if (data.type === 'ticker') {
 
     const symbol =
-        data.product_id
-            .replace('-USD', '');
+      data.product_id
+        .replace('-USD', '');
 
-const coinNames = {
+    const coinNames = {
 
-  BTC: 'Bitcoin',
-  ETH: 'Ethereum',
-  SOL: 'Solana',
-  BNB: 'BNB',
-  XRP: 'XRP',
-  DOGE: 'Dogecoin',
-  ADA: 'Cardano',
-  AVAX: 'Avalanche',
-  LINK: 'Chainlink',
-  DOT: 'Polkadot',
-  LTC: 'Litecoin',
-  TRX: 'TRON',
-  MATIC: 'Polygon',
-  SHIB: 'Shiba Inu',
-  UNI: 'Uniswap',
-  ETC: 'Ethereum Classic',
-  BCH: 'Bitcoin Cash',
-  XLM: 'Stellar',
-  ATOM: 'Cosmos',
-  ICP: 'Internet Computer',
-  FIL: 'Filecoin',
-  APT: 'Aptos',
-  NEAR: 'NEAR Protocol',
-  OP: 'Optimism',
-  ARB: 'Arbitrum',
-  SUI: 'Sui',
-  PEPE: 'Pepe',
-  INJ: 'Injective',
-  RNDR: 'Render',
-  VET: 'VeChain',
-  ALGO: 'Algorand',
-  EGLD: 'MultiversX',
-  THETA: 'Theta Network',
-  AAVE: 'Aave',
-  MKR: 'Maker',
-  GRT: 'The Graph',
-  FLOW: 'Flow',
-  HBAR: 'Hedera',
-  EOS: 'EOS',
-  SAND: 'The Sandbox',
-  MANA: 'Decentraland',
-  CRV: 'Curve DAO',
-  COMP: 'Compound',
-  SNX: 'Synthetix',
-  KAS: 'Kaspa',
-  SEI: 'Sei',
-  TIA: 'Celestia',
-  JUP: 'Jupiter',
-  BONK: 'Bonk',
-  FLOKI: 'Floki'
+      BTC: 'Bitcoin',
+      ETH: 'Ethereum',
+      SOL: 'Solana',
+      BNB: 'BNB',
+      XRP: 'XRP',
+      DOGE: 'Dogecoin',
+      ADA: 'Cardano',
+      AVAX: 'Avalanche',
+      LINK: 'Chainlink',
+      DOT: 'Polkadot',
+      LTC: 'Litecoin',
+      TRX: 'TRON',
+      MATIC: 'Polygon',
+      SHIB: 'Shiba Inu'
 
-};
-  symbol: symbol,
+    };
 
-  price: parseFloat(data.price),
+    prices[symbol] = {
 
-  change: parseFloat(data.open_24h)
-  ? (
-      ((parseFloat(data.price) -
-      parseFloat(data.open_24h)) /
-      parseFloat(data.open_24h)) *
-      100
-    ).toFixed(2)
-  : 0,
+      symbol: symbol,
 
-logo:
-`https://raw.githubusercontent.com/spothq/cryptocurrency-icons/master/128/color/${symbol.toLowerCase()}.png`
-};
+      name:
+        coinNames[symbol] ??
+        symbol,
+
+      price:
+        parseFloat(data.price),
+
+      change:
+        parseFloat(data.open_24h)
+          ? (
+              ((parseFloat(data.price) -
+              parseFloat(data.open_24h)) /
+              parseFloat(data.open_24h)) *
+              100
+            ).toFixed(2)
+          : 0,
+
+      logo:
+        `https://raw.githubusercontent.com/spothq/cryptocurrency-icons/master/128/color/${symbol.toLowerCase()}.png`
+
+    };
   }
 });
 
