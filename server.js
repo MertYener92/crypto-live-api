@@ -10,6 +10,44 @@ const PORT = process.env.PORT || 10000;
 
 let prices = {};
 
+const coinNames = {
+
+  BTC: 'Bitcoin',
+  ETH: 'Ethereum',
+  SOL: 'Solana',
+  BNB: 'BNB',
+  XRP: 'XRP',
+  DOGE: 'Dogecoin',
+  ADA: 'Cardano',
+  AVAX: 'Avalanche',
+  LINK: 'Chainlink',
+  DOT: 'Polkadot',
+  LTC: 'Litecoin',
+  TRX: 'TRON',
+  MATIC: 'Polygon',
+  SHIB: 'Shiba Inu'
+
+};
+
+const logoSymbols = {
+
+  BTC: 'btc',
+  ETH: 'eth',
+  SOL: 'sol',
+  BNB: 'bnb',
+  XRP: 'xrp',
+  DOGE: 'doge',
+  ADA: 'ada',
+  AVAX: 'avax',
+  LINK: 'link',
+  DOT: 'dot',
+  LTC: 'ltc',
+  TRX: 'trx',
+  MATIC: 'matic',
+  SHIB: 'shib'
+
+};
+
 const ws = new WebSocket(
   'wss://ws-feed.exchange.coinbase.com'
 );
@@ -61,25 +99,6 @@ ws.on('message', (msg) => {
       data.product_id
         .replace('-USD', '');
 
-    const coinNames = {
-
-      BTC: 'Bitcoin',
-      ETH: 'Ethereum',
-      SOL: 'Solana',
-      BNB: 'BNB',
-      XRP: 'XRP',
-      DOGE: 'Dogecoin',
-      ADA: 'Cardano',
-      AVAX: 'Avalanche',
-      LINK: 'Chainlink',
-      DOT: 'Polkadot',
-      LTC: 'Litecoin',
-      TRX: 'TRON',
-      MATIC: 'Polygon',
-      SHIB: 'Shiba Inu'
-
-    };
-
     prices[symbol] = {
 
       symbol: symbol,
@@ -102,7 +121,7 @@ ws.on('message', (msg) => {
           : 0,
 
       logo:
-        `https://raw.githubusercontent.com/spothq/cryptocurrency-icons/master/128/color/${symbol.toLowerCase()}.png`
+        `https://raw.githubusercontent.com/spothq/cryptocurrency-icons/master/128/color/${logoSymbols[symbol] || symbol.toLowerCase()}.png`
 
     };
   }
@@ -110,7 +129,10 @@ ws.on('message', (msg) => {
 
 ws.on('error', (err) => {
 
-  console.log(err);
+  console.log(
+    'WebSocket Error:',
+    err
+  );
 
 });
 
