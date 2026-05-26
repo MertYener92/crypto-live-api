@@ -164,7 +164,7 @@ ws.on('message', (msg) => {
           : 0,
 
       logo:
-        `https://raw.githubusercontent.com/spothq/cryptocurrency-icons/master/128/color/${symbol.toLowerCase()}.png`
+  `https://raw.githubusercontent.com/spothq/cryptocurrency-icons/master/128/color/${symbol.toLowerCase()}.png`,
 
     };
   }
