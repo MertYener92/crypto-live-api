@@ -24,27 +24,7 @@ const coinNames = {
   DOT: 'Polkadot',
   LTC: 'Litecoin',
   TRX: 'TRON',
-  MATIC: 'Polygon',
-  SHIB: 'Shiba Inu'
-
-};
-
-const logoSymbols = {
-
-  BTC: 'btc',
-  ETH: 'eth',
-  SOL: 'sol',
-  BNB: 'bnb',
-  XRP: 'xrp',
-  DOGE: 'doge',
-  ADA: 'ada',
-  AVAX: 'avax',
-  LINK: 'link',
-  DOT: 'dot',
-  LTC: 'ltc',
-  TRX: 'trx',
-  MATIC: 'pol',
-  SHIB: 'https://cryptologos.cc/logos/shiba-inu-shib-logo.png'
+  MATIC: 'Polygon'
 
 };
 
@@ -80,8 +60,7 @@ ws.on('open', () => {
           'DOT-USD',
           'LTC-USD',
           'TRX-USD',
-          'MATIC-USD',
-          'SHIB-USD'
+          'MATIC-USD'
 
         ]
       }
@@ -121,9 +100,7 @@ ws.on('message', (msg) => {
           : 0,
 
       logo:
-logoSymbols[symbol]?.startsWith('http')
-  ? logoSymbols[symbol]
-  : `https://raw.githubusercontent.com/spothq/cryptocurrency-icons/master/128/color/${logoSymbols[symbol] || symbol.toLowerCase()}.png`
+        `https://raw.githubusercontent.com/spothq/cryptocurrency-icons/master/128/color/${symbol.toLowerCase()}.png`
 
     };
   }
