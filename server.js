@@ -44,7 +44,7 @@ const logoSymbols = {
   LTC: 'ltc',
   TRX: 'trx',
   MATIC: 'pol',
-  SHIB: 'shib'
+  SHIB: 'shibainu'
 
 };
 
