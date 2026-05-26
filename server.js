@@ -91,12 +91,14 @@ ws.on('message', (msg) => {
 
       change:
         parseFloat(data.open_24h)
-          ? (
-              ((parseFloat(data.price) -
-              parseFloat(data.open_24h)) /
-              parseFloat(data.open_24h)) *
-              100
-            ).toFixed(2)
+          ? Number(
+              (
+                ((parseFloat(data.price) -
+                parseFloat(data.open_24h)) /
+                parseFloat(data.open_24h)) *
+                100
+              ).toFixed(2)
+            )
           : 0,
 
       logo:
