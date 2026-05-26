@@ -25,7 +25,6 @@ const coinNames = {
   LTC: 'Litecoin',
   TRX: 'TRON',
   MATIC: 'Polygon',
-
   ATOM: 'Cosmos',
   UNI: 'Uniswap',
   ETC: 'Ethereum Classic',
@@ -55,9 +54,115 @@ const coinNames = {
   THETA: 'Theta Network',
   AXS: 'Axie Infinity',
   SAND: 'The Sandbox',
-  MANA: 'Decentraland'
+  MANA: 'Decentraland',
+  CRO: 'Cronos',
+  VET: 'VeChain',
+  HBAR: 'Hedera',
+  QNT: 'Quant',
+  IMX: 'Immutable',
+  STX: 'Stacks',
+  KAS: 'Kaspa',
+  RUNE: 'THORChain',
+  FTM: 'Fantom',
+  NEO: 'NEO',
+  KAVA: 'Kava',
+  CAKE: 'PancakeSwap',
+  CHZ: 'Chiliz',
+  COMP: 'Compound',
+  DASH: 'Dash',
+  ZEC: 'Zcash',
+  ENJ: 'Enjin Coin',
+  BAT: 'Basic Attention Token',
+  CRV: 'Curve DAO',
+  LDO: 'Lido DAO',
+  SNX: 'Synthetix',
+  ONE: 'Harmony',
+  ROSE: 'Oasis Network',
+  MINA: 'Mina',
+  CELO: 'Celo',
+  KSM: 'Kusama',
+  WAVES: 'Waves',
+  HOT: 'Holo',
+  ZIL: 'Zilliqa'
 
 };
+
+const orderedSymbols = [
+
+  'BTC',
+  'ETH',
+  'SOL',
+  'BNB',
+  'XRP',
+  'DOGE',
+  'ADA',
+  'AVAX',
+  'LINK',
+  'DOT',
+  'LTC',
+  'TRX',
+  'MATIC',
+  'ATOM',
+  'UNI',
+  'ETC',
+  'XLM',
+  'FIL',
+  'AAVE',
+  'EOS',
+  'ICP',
+  'APT',
+  'ARB',
+  'OP',
+  'NEAR',
+  'PEPE',
+  'SHIB',
+  'SUI',
+  'INJ',
+  'SEI',
+  'BONK',
+  'TIA',
+  'RNDR',
+  'GRT',
+  'MKR',
+  'ALGO',
+  'FLOW',
+  'XTZ',
+  'EGLD',
+  'THETA',
+  'AXS',
+  'SAND',
+  'MANA',
+  'CRO',
+  'VET',
+  'HBAR',
+  'QNT',
+  'IMX',
+  'STX',
+  'KAS',
+  'RUNE',
+  'FTM',
+  'NEO',
+  'KAVA',
+  'CAKE',
+  'CHZ',
+  'COMP',
+  'DASH',
+  'ZEC',
+  'ENJ',
+  'BAT',
+  'CRV',
+  'LDO',
+  'SNX',
+  'ONE',
+  'ROSE',
+  'MINA',
+  'CELO',
+  'KSM',
+  'WAVES',
+  'HOT',
+  'ZIL'
+
+];
 
 const ws = new WebSocket(
   'wss://ws-feed.exchange.coinbase.com'
@@ -77,54 +182,9 @@ ws.on('open', () => {
       {
         name: 'ticker',
 
-        product_ids: [
-
-          'BTC-USD',
-          'ETH-USD',
-          'SOL-USD',
-          'BNB-USD',
-          'XRP-USD',
-          'DOGE-USD',
-          'ADA-USD',
-          'AVAX-USD',
-          'LINK-USD',
-          'DOT-USD',
-          'LTC-USD',
-          'TRX-USD',
-          'MATIC-USD',
-
-          'ATOM-USD',
-          'UNI-USD',
-          'ETC-USD',
-          'XLM-USD',
-          'FIL-USD',
-          'AAVE-USD',
-          'EOS-USD',
-          'ICP-USD',
-          'APT-USD',
-          'ARB-USD',
-          'OP-USD',
-          'NEAR-USD',
-          'PEPE-USD',
-          'SHIB-USD',
-          'SUI-USD',
-          'INJ-USD',
-          'SEI-USD',
-          'BONK-USD',
-          'TIA-USD',
-          'RNDR-USD',
-          'GRT-USD',
-          'MKR-USD',
-          'ALGO-USD',
-          'FLOW-USD',
-          'XTZ-USD',
-          'EGLD-USD',
-          'THETA-USD',
-          'AXS-USD',
-          'SAND-USD',
-          'MANA-USD'
-
-        ]
+        product_ids: orderedSymbols.map(
+          symbol => `${symbol}-USD`
+        )
       }
     ]
   }));
@@ -164,7 +224,7 @@ ws.on('message', (msg) => {
           : 0,
 
       logo:
-  `https://raw.githubusercontent.com/spothq/cryptocurrency-icons/master/128/color/${symbol.toLowerCase()}.png`
+        `https://raw.githubusercontent.com/spothq/cryptocurrency-icons/master/128/color/${symbol.toLowerCase()}.png`
 
     };
   }
@@ -181,7 +241,17 @@ ws.on('error', (err) => {
 
 app.get('/prices', (req, res) => {
 
-  res.json(prices);
+  const sortedPrices = {};
+
+  orderedSymbols.forEach((symbol) => {
+
+    if (prices[symbol]) {
+      sortedPrices[symbol] = prices[symbol];
+    }
+
+  });
+
+  res.json(sortedPrices);
 
 });
 
