@@ -12,8 +12,8 @@ async function loadPrices() {
   try {
 
     const response = await fetch(
-      'https://api.binance.com/api/v3/ticker/24hr'
-    );
+  'https://api.binance.com/api/v3/ticker/price'
+);
 
     const data = await response.json();
 
@@ -24,9 +24,8 @@ async function loadPrices() {
       if (coin.symbol.endsWith('USDT')) {
 
         filtered[coin.symbol] = {
-          price: coin.lastPrice,
-          change: coin.priceChangePercent,
-        };
+  price: coin.price,
+};
       }
     });
 
