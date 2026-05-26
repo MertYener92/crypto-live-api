@@ -57,7 +57,14 @@ ws.on('message', (msg) => {
 
   price: parseFloat(data.price),
 
-  change: 0,
+  change: parseFloat(data.open_24h)
+  ? (
+      ((parseFloat(data.price) -
+      parseFloat(data.open_24h)) /
+      parseFloat(data.open_24h)) *
+      100
+    ).toFixed(2)
+  : 0,
 
 logo:
 `https://raw.githubusercontent.com/spothq/cryptocurrency-icons/master/128/color/${symbol.toLowerCase()}.png`
