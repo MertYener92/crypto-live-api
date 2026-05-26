@@ -16,6 +16,7 @@ async function loadPrices() {
 );
 
     const data = await response.json();
+    console.log(data);
 
     const filtered = {};
 
