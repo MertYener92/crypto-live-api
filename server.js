@@ -1,6 +1,5 @@
 const express = require('express');
 const cors = require('cors');
-const WebSocket = require('ws');
 
 const app = express();
 
@@ -8,34 +7,54 @@ app.use(cors());
 
 let prices = {};
 
-const ws = new WebSocket(
-  'wss://stream.binance.com:9443/ws/!ticker@arr'
-);
+async function loadPrices() {
 
-ws.on('message', (data) => {
+  try {
 
-  const tickers = JSON.parse(data);
+    const response = await fetch(
+      'https://api.binance.com/api/v3/ticker/24hr'
+    );
 
-  tickers.forEach((ticker) => {
+    const data = await response.json();
 
-    const symbol = ticker.s;
+    const filtered = {};
 
-    if (symbol.endsWith('USDT')) {
+    data.forEach((coin) => {
 
-      prices[symbol] = {
-        price: ticker.c,
-        change: ticker.P,
-      };
-    }
-  });
-});
+      if (coin.symbol.endsWith('USDT')) {
+
+        filtered[coin.symbol] = {
+          price: coin.lastPrice,
+          change: coin.priceChangePercent,
+        };
+      }
+    });
+
+    prices = filtered;
+
+    console.log('prices updated');
+
+  } catch (e) {
+
+    console.log(e);
+
+  }
+}
+
+loadPrices();
+
+setInterval(loadPrices, 1000);
 
 app.get('/prices', (req, res) => {
+
   res.json(prices);
+
 });
 
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
+
   console.log(`Server running on ${PORT}`);
+
 });
