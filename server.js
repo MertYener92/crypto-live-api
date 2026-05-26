@@ -10,52 +10,60 @@ const PORT = process.env.PORT || 10000;
 
 let prices = {};
 
-const symbols = [
-  'btcusdt',
-  'ethusdt',
-  'solusdt',
-  'bnbusdt',
-  'xrpusdt'
-];
-
-const streams =
-  symbols.map(s => `${s}@ticker`).join('/');
-
 const ws = new WebSocket(
-  `wss://stream.binance.com:9443/stream?streams=${streams}`
+  'wss://ws-feed.exchange.coinbase.com'
 );
 
 ws.on('open', () => {
 
   console.log(
-    'Binance websocket connected'
+    'Coinbase websocket connected'
   );
 
+  ws.send(JSON.stringify({
+
+    type: 'subscribe',
+
+    channels: [
+      {
+        name: 'ticker',
+        product_ids: [
+          'BTC-USD',
+          'ETH-USD',
+          'SOL-USD',
+          'BNB-USD',
+          'XRP-USD'
+        ]
+      }
+    ]
+  }));
 });
 
 ws.on('message', (msg) => {
 
-  const json = JSON.parse(msg);
+  const data = JSON.parse(msg);
 
-  const data = json.data;
+  if (
+    data.type === 'ticker'
+  ) {
 
-  const symbol =
-      data.s.replace('USDT', '');
+    const symbol =
+        data.product_id
+            .replace('-USD', '');
 
-  prices[symbol] = {
+    prices[symbol] = {
 
-    price: parseFloat(data.c),
+      price: parseFloat(data.price),
 
-    change: parseFloat(data.P),
+      change: 0,
 
-  };
+    };
+  }
 });
 
-ws.on('close', () => {
+ws.on('error', (err) => {
 
-  console.log(
-    'WebSocket disconnected'
-  );
+  console.log(err);
 
 });
 
