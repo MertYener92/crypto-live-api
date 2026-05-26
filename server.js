@@ -43,7 +43,7 @@ const logoSymbols = {
   DOT: 'dot',
   LTC: 'ltc',
   TRX: 'trx',
-  MATIC: 'matic',
+  MATIC: 'pol',
   SHIB: 'shib'
 
 };
