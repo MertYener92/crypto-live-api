@@ -44,7 +44,7 @@ const logoSymbols = {
   LTC: 'ltc',
   TRX: 'trx',
   MATIC: 'pol',
-  SHIB: 'shibainu'
+  SHIB: 'https://cryptologos.cc/logos/shiba-inu-shib-logo.png'
 
 };
 
@@ -121,7 +121,9 @@ ws.on('message', (msg) => {
           : 0,
 
       logo:
-        `https://raw.githubusercontent.com/spothq/cryptocurrency-icons/master/128/color/${logoSymbols[symbol] || symbol.toLowerCase()}.png`
+logoSymbols[symbol]?.startsWith('http')
+  ? logoSymbols[symbol]
+  : `https://raw.githubusercontent.com/spothq/cryptocurrency-icons/master/128/color/${logoSymbols[symbol] || symbol.toLowerCase()}.png`
 
     };
   }
