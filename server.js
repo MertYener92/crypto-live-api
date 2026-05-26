@@ -59,9 +59,8 @@ ws.on('message', (msg) => {
 
   change: 0,
 
-  logo:
-`https://cdn.jsdelivr.net/gh/spothq/cryptocurrency-icons@master/svg/color/${symbol.toLowerCase()}.svg`
-
+logo:
+`https://raw.githubusercontent.com/spothq/cryptocurrency-icons/master/128/color/${symbol.toLowerCase()}.png`
 };
   }
 });
