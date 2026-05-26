@@ -53,11 +53,16 @@ ws.on('message', (msg) => {
 
     prices[symbol] = {
 
-      price: parseFloat(data.price),
+  symbol: symbol,
 
-      change: 0,
+  price: parseFloat(data.price),
 
-    };
+  change: 0,
+
+  logo:
+    `https://assets.coincap.io/assets/icons/${symbol.toLowerCase()}@2x.png`
+
+};
   }
 });
 
