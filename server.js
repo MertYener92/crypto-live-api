@@ -60,7 +60,8 @@ ws.on('message', (msg) => {
   change: 0,
 
   logo:
-    `https://assets.coincap.io/assets/icons/${symbol.toLowerCase()}@2x.png`
+    logo:
+`https://cdn.jsdelivr.net/gh/spothq/cryptocurrency-icons@master/svg/color/${symbol.toLowerCase()}.svg`
 
 };
   }
