@@ -1,48 +1,63 @@
 const express = require('express');
+const WebSocket = require('ws');
 const cors = require('cors');
 
 const app = express();
 
 app.use(cors());
 
+const PORT = process.env.PORT || 10000;
+
 let prices = {};
 
-async function loadPrices() {
+const symbols = [
+  'btcusdt',
+  'ethusdt',
+  'solusdt',
+  'bnbusdt',
+  'xrpusdt'
+];
 
-  try {
+const streams =
+  symbols.map(s => `${s}@ticker`).join('/');
 
-    const response = await fetch(
-      'https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&per_page=100&page=1'
-    );
+const ws = new WebSocket(
+  `wss://stream.binance.com:9443/stream?streams=${streams}`
+);
 
-    const data = await response.json();
+ws.on('open', () => {
 
-    const filtered = {};
+  console.log(
+    'Binance websocket connected'
+  );
 
-    data.forEach((coin) => {
+});
 
-      filtered[coin.symbol.toUpperCase()] = {
-        price: coin.current_price,
-        change: coin.price_change_percentage_24h,
-        image: coin.image,
-        name: coin.name,
-      };
-    });
+ws.on('message', (msg) => {
 
-    prices = filtered;
+  const json = JSON.parse(msg);
 
-    console.log('prices updated');
+  const data = json.data;
 
-  } catch (e) {
+  const symbol =
+      data.s.replace('USDT', '');
 
-    console.log(e);
+  prices[symbol] = {
 
-  }
-}
+    price: parseFloat(data.c),
 
-loadPrices();
+    change: parseFloat(data.P),
 
-setInterval(loadPrices, 1000);
+  };
+});
+
+ws.on('close', () => {
+
+  console.log(
+    'WebSocket disconnected'
+  );
+
+});
 
 app.get('/prices', (req, res) => {
 
@@ -50,10 +65,10 @@ app.get('/prices', (req, res) => {
 
 });
 
-const PORT = process.env.PORT || 3000;
-
 app.listen(PORT, () => {
 
-  console.log(`Server running on ${PORT}`);
+  console.log(
+    `Server running on ${PORT}`
+  );
 
 });
