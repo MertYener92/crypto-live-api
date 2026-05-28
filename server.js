@@ -1,6 +1,7 @@
 const express = require('express');
-const WebSocket = require('ws');
+const WebSocket = require('ws').WebSocket;
 const cors = require('cors');
+const axios = require('axios');
 
 const app = express();
 
@@ -10,234 +11,238 @@ const PORT = process.env.PORT || 10000;
 
 let prices = {};
 
-const coinNames = {
+let orderedSymbols = [];
 
-  BTC: 'Bitcoin',
-  ETH: 'Ethereum',
-  SOL: 'Solana',
-  BNB: 'BNB',
-  XRP: 'XRP',
-  DOGE: 'Dogecoin',
-  ADA: 'Cardano',
-  AVAX: 'Avalanche',
-  LINK: 'Chainlink',
-  DOT: 'Polkadot',
-  LTC: 'Litecoin',
-  TRX: 'TRON',
-  MATIC: 'Polygon',
-  ATOM: 'Cosmos',
-  UNI: 'Uniswap',
-  ETC: 'Ethereum Classic',
-  XLM: 'Stellar',
-  FIL: 'Filecoin',
-  AAVE: 'Aave',
-  EOS: 'EOS',
-  ICP: 'Internet Computer',
-  APT: 'Aptos',
-  ARB: 'Arbitrum',
-  OP: 'Optimism',
-  NEAR: 'NEAR Protocol',
-  PEPE: 'Pepe',
-  SHIB: 'Shiba Inu',
-  SUI: 'Sui',
-  INJ: 'Injective',
-  SEI: 'Sei',
-  BONK: 'Bonk',
-  TIA: 'Celestia',
-  RNDR: 'Render',
-  GRT: 'The Graph',
-  MKR: 'Maker',
-  ALGO: 'Algorand',
-  FLOW: 'Flow',
-  XTZ: 'Tezos',
-  EGLD: 'MultiversX',
-  THETA: 'Theta Network',
-  AXS: 'Axie Infinity',
-  SAND: 'The Sandbox',
-  MANA: 'Decentraland',
-  CRO: 'Cronos',
-  VET: 'VeChain',
-  HBAR: 'Hedera',
-  QNT: 'Quant',
-  IMX: 'Immutable',
-  STX: 'Stacks',
-  KAS: 'Kaspa',
-  RUNE: 'THORChain',
-  FTM: 'Fantom',
-  NEO: 'NEO',
-  KAVA: 'Kava',
-  CAKE: 'PancakeSwap',
-  CHZ: 'Chiliz',
-  COMP: 'Compound',
-  DASH: 'Dash',
-  ZEC: 'Zcash',
-  ENJ: 'Enjin Coin',
-  BAT: 'Basic Attention Token',
-  CRV: 'Curve DAO',
-  LDO: 'Lido DAO',
-  SNX: 'Synthetix',
-  ONE: 'Harmony',
-  ROSE: 'Oasis Network',
-  MINA: 'Mina',
-  CELO: 'Celo',
-  KSM: 'Kusama',
-  WAVES: 'Waves',
-  HOT: 'Holo',
-  ZIL: 'Zilliqa'
+let coinMetadata = {};
 
-};
+let ws = null;
 
-const orderedSymbols = [
+async function loadTopCoins() {
 
-  'BTC',
-  'ETH',
-  'SOL',
-  'BNB',
-  'XRP',
-  'DOGE',
-  'ADA',
-  'AVAX',
-  'LINK',
-  'DOT',
-  'LTC',
-  'TRX',
-  'MATIC',
-  'ATOM',
-  'UNI',
-  'ETC',
-  'XLM',
-  'FIL',
-  'AAVE',
-  'EOS',
-  'ICP',
-  'APT',
-  'ARB',
-  'OP',
-  'NEAR',
-  'PEPE',
-  'SHIB',
-  'SUI',
-  'INJ',
-  'SEI',
-  'BONK',
-  'TIA',
-  'RNDR',
-  'GRT',
-  'MKR',
-  'ALGO',
-  'FLOW',
-  'XTZ',
-  'EGLD',
-  'THETA',
-  'AXS',
-  'SAND',
-  'MANA',
-  'CRO',
-  'VET',
-  'HBAR',
-  'QNT',
-  'IMX',
-  'STX',
-  'KAS',
-  'RUNE',
-  'FTM',
-  'NEO',
-  'KAVA',
-  'CAKE',
-  'CHZ',
-  'COMP',
-  'DASH',
-  'ZEC',
-  'ENJ',
-  'BAT',
-  'CRV',
-  'LDO',
-  'SNX',
-  'ONE',
-  'ROSE',
-  'MINA',
-  'CELO',
-  'KSM',
-  'WAVES',
-  'HOT',
-  'ZIL'
+  try {
 
-];
-
-const ws = new WebSocket(
-  'wss://ws-feed.exchange.coinbase.com'
-);
-
-ws.on('open', () => {
-
-  console.log(
-    'Coinbase websocket connected'
-  );
-
-  ws.send(JSON.stringify({
-
-    type: 'subscribe',
-
-    channels: [
+    const response = await axios.get(
+      'https://api.coingecko.com/api/v3/coins/markets',
       {
-        name: 'ticker',
-
-        product_ids: orderedSymbols.map(
-          symbol => `${symbol}-USD`
-        )
+        params: {
+          vs_currency: 'usd',
+          order: 'market_cap_desc',
+          per_page: 100,
+          page: 1,
+          sparkline: false
+        }
       }
-    ]
-  }));
-});
+    );
 
-ws.on('message', (msg) => {
+    const supportedCoins = [
 
-  const data = JSON.parse(msg);
+      'BTC',
+      'ETH',
+      'SOL',
+      'XRP',
+      'DOGE'
 
-  if (data.type === 'ticker') {
+    ];
 
-    const symbol =
-      data.product_id
-        .replace('-USD', '');
+    response.data.forEach((coin, index) => {
 
-    prices[symbol] = {
+      const symbol =
+        coin.symbol.toUpperCase();
 
-      symbol: symbol,
+      if (
+        supportedCoins.includes(symbol)
+      ) {
 
-      name:
-        coinNames[symbol] ??
-        symbol,
+        orderedSymbols.push(symbol);
 
-      price:
-        parseFloat(data.price),
+        coinMetadata[symbol] = {
 
-      change:
-        parseFloat(data.open_24h)
-          ? Number(
-              (
-                ((parseFloat(data.price) -
-                parseFloat(data.open_24h)) /
-                parseFloat(data.open_24h)) *
-                100
-              ).toFixed(2)
-            )
-          : 0,
+          rank: index + 1,
 
-      logo:
-        `https://raw.githubusercontent.com/spothq/cryptocurrency-icons/master/128/color/${symbol.toLowerCase()}.png`
+          symbol: symbol,
 
-    };
+          name: coin.name,
+
+          marketCap: coin.market_cap,
+
+          logo: coin.image
+
+        };
+
+      }
+
+    });
+
+    console.log(
+      'Top coins loaded'
+    );
+
+    console.log(
+      orderedSymbols
+    );
+
+    startWebSocket();
+
+  } catch (e) {
+
+    console.log(
+      'CoinGecko Error:',
+      e.message
+    );
+
   }
-});
 
-ws.on('error', (err) => {
+}
 
-  console.log(
-    'WebSocket Error:',
-    err
+function startWebSocket() {
+
+  if (ws) {
+
+    ws.close();
+
+  }
+
+  ws = new WebSocket(
+    'wss://ws-feed.exchange.coinbase.com',
+    {
+      perMessageDeflate: false
+    }
   );
 
-});
+  ws.on('open', () => {
+
+    console.log(
+      'Coinbase websocket connected'
+    );
+
+    ws.send(JSON.stringify({
+
+      type: 'subscribe',
+
+      channels: [
+        {
+          name: 'ticker',
+
+          product_ids: [
+
+            'BTC-USD',
+            'ETH-USD',
+            'SOL-USD',
+            'XRP-USD',
+            'DOGE-USD'
+
+          ]
+
+        }
+      ]
+
+    }));
+
+  });
+
+  ws.on('message', (msg) => {
+
+    try {
+
+      const data = JSON.parse(
+        msg.toString()
+      );
+
+      if (data.type === 'ticker') {
+
+        const symbol =
+          data.product_id.replace(
+            '-USD',
+            ''
+          );
+
+        if (
+          !coinMetadata[symbol]
+        ) {
+          return;
+        }
+
+        const price =
+          parseFloat(data.price);
+
+        const open =
+          parseFloat(data.open_24h);
+
+        const change =
+          open
+            ? Number(
+                (
+                  (
+                    (price - open) /
+                    open
+                  ) * 100
+                ).toFixed(2)
+              )
+            : 0;
+
+        prices[symbol] = {
+
+          rank:
+            coinMetadata[symbol]
+              .rank,
+
+          symbol: symbol,
+
+          name:
+            coinMetadata[symbol]
+              .name,
+
+          marketCap:
+            coinMetadata[symbol]
+              .marketCap,
+
+          logo:
+            coinMetadata[symbol]
+              .logo,
+
+          price: price,
+
+          change: change
+
+        };
+
+      }
+
+    } catch (e) {
+
+      console.log(
+        'Parse Error:',
+        e.message
+      );
+
+    }
+
+  });
+
+  ws.on('error', (err) => {
+
+    console.log(
+      'WebSocket Error:',
+      err.message
+    );
+
+  });
+
+  ws.on('close', () => {
+
+    console.log(
+      'WebSocket closed. Reconnecting...'
+    );
+
+    setTimeout(() => {
+
+      startWebSocket();
+
+    }, 3000);
+
+  });
+
+}
 
 app.get('/prices', (req, res) => {
 
@@ -246,7 +251,10 @@ app.get('/prices', (req, res) => {
   orderedSymbols.forEach((symbol) => {
 
     if (prices[symbol]) {
-      sortedPrices[symbol] = prices[symbol];
+
+      sortedPrices[symbol] =
+        prices[symbol];
+
     }
 
   });
@@ -254,6 +262,8 @@ app.get('/prices', (req, res) => {
   res.json(sortedPrices);
 
 });
+
+loadTopCoins();
 
 app.listen(PORT, () => {
 
