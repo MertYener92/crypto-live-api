@@ -26,52 +26,36 @@ async function loadTopCoins() {
     );
 
     const topCoins =
-      response.data.data;
-
-    const supportedCoins = [
-
-      'BTC',
-      'ETH',
-      'SOL',
-      'XRP',
-      'DOGE'
-
-    ];
+      response.data.data.slice(0, 100);
 
     topCoins.forEach((coin, index) => {
 
       const symbol =
         coin.symbol;
 
-      if (
-        supportedCoins.includes(symbol)
-      ) {
+      orderedSymbols.push(symbol);
 
-        orderedSymbols.push(symbol);
+      coinMetadata[symbol] = {
 
-        coinMetadata[symbol] = {
+        rank: index + 1,
 
-          rank: index + 1,
+        symbol: symbol,
 
-          symbol: symbol,
+        name: coin.name,
 
-          name: coin.name,
+        marketCap: Number(
+          coin.market_cap_usd
+        ),
 
-          marketCap: Number(
-            coin.market_cap_usd
-          ),
+        logo:
+          `https://raw.githubusercontent.com/spothq/cryptocurrency-icons/master/128/color/${symbol.toLowerCase()}.png`
 
-          logo:
-            `https://raw.githubusercontent.com/spothq/cryptocurrency-icons/master/128/color/${symbol.toLowerCase()}.png`
-
-        };
-
-      }
+      };
 
     });
 
     console.log(
-      'Top coins loaded'
+      'Top 100 coins loaded'
     );
 
     console.log(
@@ -112,6 +96,12 @@ function startWebSocket() {
       'Coinbase websocket connected'
     );
 
+    const productIds =
+      orderedSymbols.map(
+        (symbol) =>
+          `${symbol}-USD`
+      );
+
     ws.send(JSON.stringify({
 
       type: 'subscribe',
@@ -120,15 +110,8 @@ function startWebSocket() {
         {
           name: 'ticker',
 
-          product_ids: [
-
-            'BTC-USD',
-            'ETH-USD',
-            'SOL-USD',
-            'XRP-USD',
-            'DOGE-USD'
-
-          ]
+          product_ids:
+            productIds
 
         }
       ]
