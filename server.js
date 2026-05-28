@@ -22,17 +22,11 @@ async function loadTopCoins() {
   try {
 
     const response = await axios.get(
-      'https://api.coingecko.com/api/v3/coins/markets',
-      {
-        params: {
-          vs_currency: 'usd',
-          order: 'market_cap_desc',
-          per_page: 100,
-          page: 1,
-          sparkline: false
-        }
-      }
+      'https://api.coincap.io/v2/assets'
     );
+
+    const topCoins =
+      response.data.data.slice(0, 100);
 
     const supportedCoins = [
 
@@ -44,7 +38,7 @@ async function loadTopCoins() {
 
     ];
 
-    response.data.forEach((coin, index) => {
+    topCoins.forEach((coin, index) => {
 
       const symbol =
         coin.symbol.toUpperCase();
@@ -63,9 +57,12 @@ async function loadTopCoins() {
 
           name: coin.name,
 
-          marketCap: coin.market_cap,
+          marketCap: Number(
+            coin.marketCapUsd
+          ),
 
-          logo: coin.image
+          logo:
+            `https://assets.coincap.io/assets/icons/${symbol.toLowerCase()}@2x.png`
 
         };
 
@@ -86,7 +83,7 @@ async function loadTopCoins() {
   } catch (e) {
 
     console.log(
-      'CoinGecko Error:',
+      'CoinCap Error:',
       e.message
     );
 
