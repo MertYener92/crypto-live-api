@@ -22,11 +22,11 @@ async function loadTopCoins() {
   try {
 
     const response = await axios.get(
-      'https://api.coincap.io/v2/assets'
+      'https://api.coinlore.net/api/tickers/'
     );
 
     const topCoins =
-      response.data.data.slice(0, 100);
+      response.data.data;
 
     const supportedCoins = [
 
@@ -41,7 +41,7 @@ async function loadTopCoins() {
     topCoins.forEach((coin, index) => {
 
       const symbol =
-        coin.symbol.toUpperCase();
+        coin.symbol;
 
       if (
         supportedCoins.includes(symbol)
@@ -58,7 +58,7 @@ async function loadTopCoins() {
           name: coin.name,
 
           marketCap: Number(
-            coin.marketCapUsd
+            coin.market_cap_usd
           ),
 
           logo:
@@ -83,7 +83,7 @@ async function loadTopCoins() {
   } catch (e) {
 
     console.log(
-      'CoinCap Error:',
+      'CoinLore Error:',
       e.message
     );
 
