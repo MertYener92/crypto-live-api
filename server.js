@@ -243,16 +243,23 @@ function startWebSocket() {
 
 app.get('/prices', (req, res) => {
 
-  const sortedPrices = {};
+  const sortedPrices = [];
 
   orderedSymbols.forEach((symbol) => {
 
     if (prices[symbol]) {
 
-      sortedPrices[symbol] =
-        prices[symbol];
+      sortedPrices.push(
+        prices[symbol]
+      );
 
     }
+
+  });
+
+  sortedPrices.sort((a, b) => {
+
+    return a.rank - b.rank;
 
   });
 
