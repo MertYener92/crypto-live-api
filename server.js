@@ -62,7 +62,7 @@ async function loadTopCoins() {
           ),
 
           logo:
-            `https://assets.coincap.io/assets/icons/${symbol.toLowerCase()}@2x.png`
+            `https://raw.githubusercontent.com/spothq/cryptocurrency-icons/master/128/color/${symbol.toLowerCase()}.png`
 
         };
 
@@ -243,23 +243,16 @@ function startWebSocket() {
 
 app.get('/prices', (req, res) => {
 
-  const sortedPrices = [];
+  const sortedPrices = {};
 
   orderedSymbols.forEach((symbol) => {
 
     if (prices[symbol]) {
 
-      sortedPrices.push(
-        prices[symbol]
-      );
+      sortedPrices[symbol] =
+        prices[symbol];
 
     }
-
-  });
-
-  sortedPrices.sort((a, b) => {
-
-    return a.rank - b.rank;
 
   });
 
