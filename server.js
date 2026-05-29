@@ -154,27 +154,6 @@ async function loadGlobalStats() {
 
 }
 
-async function testCandles() {
-  try {
-
-    const response = await axios.get(
-      'https://api.exchange.coinbase.com/products/BTC-USD/candles?granularity=3600'
-    );
-
-    console.log(
-      'CANDLES TEST:',
-      response.data.slice(0, 5)
-    );
-
-  } catch (e) {
-
-    console.log(
-      'Candles Error:',
-      e.message
-    );
-
-  }
-}
 
 function startWebSocket() {
 
@@ -378,9 +357,113 @@ app.get('/prices', (req, res) => {
 
 });
 
-loadTopCoins();
+function getChartConfig(range) {
 
-testCandles();
+  switch (range) {
+
+    case '1D':
+      return {
+        days: 1,
+        granularity: 3600
+      };
+
+    case '7D':
+      return {
+        days: 7,
+        granularity: 21600
+      };
+
+    case '1M':
+      return {
+        days: 30,
+        granularity: 86400
+      };
+
+    case '3M':
+      return {
+        days: 90,
+        granularity: 86400
+      };
+
+    case '1Y':
+      return {
+        days: 365,
+        granularity: 86400
+      };
+
+    default:
+      return {
+        days: 30,
+        granularity: 86400
+      };
+  }
+
+}
+
+app.get('/chart/:symbol', async (req, res) => {
+
+  try {
+
+    const symbol =
+      req.params.symbol.toUpperCase();
+
+    const range =
+      req.query.range || '1D';
+
+    const config =
+      getChartConfig(range);
+
+    const end =
+      new Date();
+
+    const start =
+      new Date(
+        end.getTime() -
+        config.days *
+        24 *
+        60 *
+        60 *
+        1000
+      );
+
+    const response =
+      await axios.get(
+        `https://api.exchange.coinbase.com/products/${symbol}-USD/candles`,
+        {
+          params: {
+            start: start.toISOString(),
+            end: end.toISOString(),
+            granularity: config.granularity
+          }
+        }
+      );
+
+    const chartData =
+      response.data
+        .map((candle) => ({
+          time: candle[0],
+          price: candle[4]
+        }))
+        .reverse();
+
+    res.json(chartData);
+
+  } catch (e) {
+
+    console.log(
+      'Chart Error:',
+      e.message
+    );
+
+    res.status(500).json({
+      error: e.message
+    });
+
+  }
+
+});
+
+loadTopCoins();
 
 app.listen(PORT, () => {
 
