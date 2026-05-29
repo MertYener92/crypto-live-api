@@ -10,17 +10,14 @@ app.use(cors());
 const PORT = process.env.PORT || 10000;
 
 let prices = {};
-
 let orderedSymbols = [];
-
 let coinMetadata = {};
+let coinStats = {};
 
 let ws = null;
 
 async function loadTopCoins() {
-
   try {
-
     const response = await axios.get(
       'https://api.coinlore.net/api/tickers/'
     );
@@ -28,15 +25,14 @@ async function loadTopCoins() {
     const topCoins =
       response.data.data.slice(0, 100);
 
-    topCoins.forEach((coin, index) => {
+    orderedSymbols = [];
 
-      const symbol =
-        coin.symbol;
+    topCoins.forEach((coin, index) => {
+      const symbol = coin.symbol;
 
       orderedSymbols.push(symbol);
 
       coinMetadata[symbol] = {
-
         rank: index + 1,
 
         symbol: symbol,
@@ -49,20 +45,20 @@ async function loadTopCoins() {
 
         logo:
           `https://raw.githubusercontent.com/spothq/cryptocurrency-icons/master/128/color/${symbol.toLowerCase()}.png`
-
       };
-
     });
 
     console.log(
       'Top 100 coins loaded'
     );
 
-    console.log(
-      orderedSymbols
-    );
-
     startWebSocket();
+
+    await loadCoinStats();
+
+    setInterval(() => {
+      loadCoinStats();
+    }, 300000);
 
   } catch (e) {
 
@@ -72,15 +68,61 @@ async function loadTopCoins() {
     );
 
   }
+}
 
+async function loadCoinStats() {
+  try {
+
+    for (const symbol of orderedSymbols) {
+
+      try {
+
+        const response = await axios.get(
+          `https://api.exchange.coinbase.com/products/${symbol}-USD/stats`
+        );
+
+        coinStats[symbol] = {
+
+          high24h: Number(
+            response.data.high
+          ),
+
+          low24h: Number(
+            response.data.low
+          ),
+
+          volume24h: Number(
+            response.data.volume
+          )
+
+        };
+
+      } catch (e) {
+
+        // Coinbase'de olmayan coinler olabilir
+
+      }
+
+    }
+
+    console.log(
+      'Coin stats loaded'
+    );
+
+  } catch (e) {
+
+    console.log(
+      'Stats Error:',
+      e.message
+    );
+
+  }
 }
 
 function startWebSocket() {
 
   if (ws) {
-
     ws.close();
-
   }
 
   ws = new WebSocket(
@@ -102,21 +144,22 @@ function startWebSocket() {
           `${symbol}-USD`
       );
 
-    ws.send(JSON.stringify({
+    ws.send(
+      JSON.stringify({
 
-      type: 'subscribe',
+        type: 'subscribe',
 
-      channels: [
-        {
-          name: 'ticker',
+        channels: [
+          {
+            name: 'ticker',
 
-          product_ids:
-            productIds
+            product_ids:
+              productIds
+          }
+        ]
 
-        }
-      ]
-
-    }));
+      })
+    );
 
   });
 
@@ -146,7 +189,9 @@ function startWebSocket() {
           parseFloat(data.price);
 
         const open =
-          parseFloat(data.open_24h);
+          parseFloat(
+            data.open_24h
+          );
 
         const change =
           open
@@ -166,7 +211,8 @@ function startWebSocket() {
             coinMetadata[symbol]
               .rank,
 
-          symbol: symbol,
+          symbol:
+            symbol,
 
           name:
             coinMetadata[symbol]
@@ -176,13 +222,27 @@ function startWebSocket() {
             coinMetadata[symbol]
               .marketCap,
 
+          high24h:
+            coinStats[symbol]
+              ?.high24h || 0,
+
+          low24h:
+            coinStats[symbol]
+              ?.low24h || 0,
+
+          volume24h:
+            coinStats[symbol]
+              ?.volume24h || 0,
+
           logo:
             coinMetadata[symbol]
               .logo,
 
-          price: price,
+          price:
+            price,
 
-          change: change
+          change:
+            change
 
         };
 
@@ -228,18 +288,24 @@ app.get('/prices', (req, res) => {
 
   const sortedPrices = {};
 
-  orderedSymbols.forEach((symbol) => {
+  orderedSymbols.forEach(
+    (symbol) => {
 
-    if (prices[symbol]) {
+      if (
+        prices[symbol]
+      ) {
 
-      sortedPrices[symbol] =
-        prices[symbol];
+        sortedPrices[symbol] =
+          prices[symbol];
+
+      }
 
     }
+  );
 
-  });
-
-  res.json(sortedPrices);
+  res.json(
+    sortedPrices
+  );
 
 });
 
