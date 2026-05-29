@@ -13,6 +13,8 @@ let prices = {};
 let orderedSymbols = [];
 let coinMetadata = {};
 let coinStats = {};
+let totalMarketCap = 0;
+
 
 let ws = null;
 
@@ -52,13 +54,19 @@ async function loadTopCoins() {
       'Top 100 coins loaded'
     );
 
-    startWebSocket();
+startWebSocket();
 
-    await loadCoinStats();
+await loadCoinStats();
+
+await loadGlobalStats();
 
     setInterval(() => {
       loadCoinStats();
     }, 300000);
+
+    setInterval(() => {
+  loadGlobalStats();
+}, 300000);
 
   } catch (e) {
 
@@ -117,6 +125,33 @@ async function loadCoinStats() {
     );
 
   }
+}
+
+async function loadGlobalStats() {
+
+  try {
+
+    const response = await axios.get(
+      'https://api.coinlore.net/api/global/'
+    );
+
+    totalMarketCap = Number(
+      response.data[0].total_mcap
+    );
+
+    console.log(
+      'Global market cap loaded'
+    );
+
+  } catch (e) {
+
+    console.log(
+      'Global Stats Error:',
+      e.message
+    );
+
+  }
+
 }
 
 function startWebSocket() {
@@ -204,7 +239,17 @@ function startWebSocket() {
                 ).toFixed(2)
               )
             : 0;
-
+const dominance =
+  totalMarketCap > 0
+    ? Number(
+        (
+          coinMetadata[symbol]
+            .marketCap /
+          totalMarketCap *
+          100
+        ).toFixed(2)
+      )
+    : 0;
         prices[symbol] = {
 
           rank:
@@ -221,6 +266,8 @@ function startWebSocket() {
           marketCap:
             coinMetadata[symbol]
               .marketCap,
+              dominance:
+  dominance,
 
           high24h:
             coinStats[symbol]
