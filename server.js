@@ -154,6 +154,28 @@ async function loadGlobalStats() {
 
 }
 
+async function testCandles() {
+  try {
+
+    const response = await axios.get(
+      'https://api.exchange.coinbase.com/products/BTC-USD/candles?granularity=3600'
+    );
+
+    console.log(
+      'CANDLES TEST:',
+      response.data.slice(0, 5)
+    );
+
+  } catch (e) {
+
+    console.log(
+      'Candles Error:',
+      e.message
+    );
+
+  }
+}
+
 function startWebSocket() {
 
   if (ws) {
@@ -357,6 +379,8 @@ app.get('/prices', (req, res) => {
 });
 
 loadTopCoins();
+
+testCandles();
 
 app.listen(PORT, () => {
 
