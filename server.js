@@ -2,29 +2,29 @@ const express = require('express');
 const WebSocket = require('ws').WebSocket;
 const cors = require('cors');
 const axios = require('axios');
- 
+
 const app = express();
 app.use(cors());
- 
+
 const PORT = process.env.PORT || 10000;
- 
+
 let prices = {};
 let orderedSymbols = [];
 let coinMetadata = {};
 let coinStats = {};
 let totalMarketCap = 0;
 let ws = null;
- 
+
 // ─────────────────────────────────────────────────────────────────────────────
 // CoinLore — Top 100 coin yükle
 // ─────────────────────────────────────────────────────────────────────────────
 async function loadTopCoins() {
   try {
     const response = await axios.get('https://api.coinlore.net/api/tickers/');
-    const topCoins = response.data.data.slice(0, 300);
- 
+    const topCoins = response.data.data.slice(0, 100);
+
     orderedSymbols = [];
- 
+
     topCoins.forEach((coin, index) => {
       const symbol = coin.symbol;
       orderedSymbols.push(symbol);
@@ -36,13 +36,13 @@ async function loadTopCoins() {
         logo: `https://raw.githubusercontent.com/spothq/cryptocurrency-icons/master/128/color/${symbol.toLowerCase()}.png`,
       };
     });
- 
+
     console.log('Top 100 coins loaded');
- 
+
     startWebSocket();
     await loadCoinStats();
     await loadGlobalStats();
- 
+
     // Her 5 dakikada istatistikleri yenile
     setInterval(() => loadCoinStats(), 300000);
     setInterval(() => loadGlobalStats(), 300000);
@@ -50,7 +50,7 @@ async function loadTopCoins() {
     console.log('CoinLore Error:', e.message);
   }
 }
- 
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Coinbase REST — 24s istatistikler (high / low / volume)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -75,7 +75,7 @@ async function loadCoinStats() {
     console.log('Stats Error:', e.message);
   }
 }
- 
+
 // ─────────────────────────────────────────────────────────────────────────────
 // CoinLore — Global market cap
 // ─────────────────────────────────────────────────────────────────────────────
@@ -88,20 +88,20 @@ async function loadGlobalStats() {
     console.log('Global Stats Error:', e.message);
   }
 }
- 
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Coinbase WebSocket — canlı fiyatlar
 // ─────────────────────────────────────────────────────────────────────────────
 function startWebSocket() {
   if (ws) ws.close();
- 
+
   ws = new WebSocket('wss://ws-feed.exchange.coinbase.com', {
     perMessageDeflate: false,
   });
- 
+
   ws.on('open', () => {
     console.log('Coinbase WebSocket connected');
- 
+
     const productIds = orderedSymbols.map((s) => `${s}-USD`);
     ws.send(
       JSON.stringify({
@@ -110,28 +110,28 @@ function startWebSocket() {
       })
     );
   });
- 
+
   ws.on('message', (msg) => {
     try {
       const data = JSON.parse(msg.toString());
       if (data.type !== 'ticker') return;
- 
+
       const symbol = data.product_id.replace('-USD', '');
       if (!coinMetadata[symbol]) return;
- 
+
       const price = parseFloat(data.price);
       const open = parseFloat(data.open_24h);
       const change = open
         ? Number((((price - open) / open) * 100).toFixed(2))
         : 0;
- 
+
       const dominance =
         totalMarketCap > 0
           ? Number(
               ((coinMetadata[symbol].marketCap / totalMarketCap) * 100).toFixed(2)
             )
           : 0;
- 
+
       prices[symbol] = {
         rank: coinMetadata[symbol].rank,
         symbol,
@@ -149,15 +149,15 @@ function startWebSocket() {
       console.log('Parse Error:', e.message);
     }
   });
- 
+
   ws.on('error', (err) => console.log('WebSocket Error:', err.message));
- 
+
   ws.on('close', () => {
     console.log('WebSocket closed. Reconnecting in 3s...');
     setTimeout(() => startWebSocket(), 3000);
   });
 }
- 
+
 // ─────────────────────────────────────────────────────────────────────────────
 // GET /prices  — tüm canlı fiyatlar
 // ─────────────────────────────────────────────────────────────────────────────
@@ -168,7 +168,7 @@ app.get('/prices', (req, res) => {
   });
   res.json(sortedPrices);
 });
- 
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Chart periyot konfigürasyonu
 //
@@ -191,24 +191,24 @@ function getChartConfig(period) {
     default:    return { days: 1,    granularity: 3600  };
   }
 }
- 
+
 // Coinbase /candles endpoint'i tek seferde max 300 mum döndürür.
 // 300'den fazla mum gereken periyotlar için istekleri böl ve birleştir.
 async function fetchCandles(symbol, startMs, endMs, granularity) {
   const maxCandles = 300;
   const windowMs = granularity * maxCandles * 1000; // her isteğin kapsadığı ms
- 
+
   const chunks = [];
   let chunkEnd = endMs;
- 
+
   while (chunkEnd > startMs) {
     const chunkStart = Math.max(chunkEnd - windowMs, startMs);
     chunks.push({ start: chunkStart, end: chunkEnd });
     chunkEnd = chunkStart;
   }
- 
+
   let allCandles = [];
- 
+
   for (const chunk of chunks) {
     try {
       const response = await axios.get(
@@ -226,10 +226,10 @@ async function fetchCandles(symbol, startMs, endMs, granularity) {
       console.log(`Candle chunk error (${symbol}):`, e.message);
     }
   }
- 
+
   return allCandles;
 }
- 
+
 // ─────────────────────────────────────────────────────────────────────────────
 // GET /chart/:symbol?period=1D|1M|3M|6M|1Y|5Y
 // Yanıt: [{ time: <unix_saniye>, price: <close_fiyatı> }, ...]
@@ -237,22 +237,22 @@ async function fetchCandles(symbol, startMs, endMs, granularity) {
 app.get('/chart/:symbol', async (req, res) => {
   try {
     const symbol = req.params.symbol.toUpperCase();
- 
+
     // Flutter widget "period" parametresi gönderiyor (1D, 1M, 3M, 6M, 1Y, 5Y)
     // Eski "range" parametresine de geriye dönük destek ver
     const period = req.query.period || req.query.range || '1D';
- 
+
     const config = getChartConfig(period);
- 
+
     const endMs = Date.now();
     const startMs = endMs - config.days * 24 * 60 * 60 * 1000;
- 
+
     const candles = await fetchCandles(symbol, startMs, endMs, config.granularity);
- 
+
     if (!candles || candles.length === 0) {
       return res.status(404).json({ error: 'No candle data found' });
     }
- 
+
     // Coinbase candle formatı: [time, low, high, open, close, volume]
     const chartData = candles
       .map((c) => ({
@@ -263,19 +263,55 @@ app.get('/chart/:symbol', async (req, res) => {
       .filter(                           // olası duplikasyonları temizle
         (item, i, arr) => i === 0 || item.time !== arr[i - 1].time
       );
- 
+
     res.json(chartData);
   } catch (e) {
     console.log('Chart Error:', e.message);
     res.status(500).json({ error: e.message });
   }
 });
- 
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Korku & Açgözlülük Endeksi — alternative.me (cache: 10 dakika)
+// ─────────────────────────────────────────────────────────────────────────────
+let fngCache = null;
+let fngLastFetch = 0;
+
+app.get('/fng', async (req, res) => {
+  try {
+    const now = Date.now();
+    // 10 dakika cache
+    if (fngCache && now - fngLastFetch < 10 * 60 * 1000) {
+      return res.json(fngCache);
+    }
+
+    const response = await axios.get(
+      'https://api.alternative.me/fng/?limit=1',
+      { timeout: 5000 }
+    );
+
+    const item = response.data.data[0];
+    fngCache = {
+      value: parseInt(item.value),
+      classification: item.value_classification,
+      timestamp: item.timestamp,
+    };
+    fngLastFetch = now;
+
+    res.json(fngCache);
+  } catch (e) {
+    console.log('FNG Error:', e.message);
+    // Cache varsa eski veriyi dön
+    if (fngCache) return res.json(fngCache);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Başlat
 // ─────────────────────────────────────────────────────────────────────────────
 loadTopCoins();
- 
+
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
