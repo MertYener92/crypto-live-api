@@ -21,7 +21,7 @@ let ws = null;
 async function loadTopCoins() {
   try {
     const response = await axios.get('https://api.coinlore.net/api/tickers/');
-    const topCoins = response.data.data.slice(0, 100);
+    const topCoins = response.data.data.slice(0, 300);
  
     orderedSymbols = [];
  
