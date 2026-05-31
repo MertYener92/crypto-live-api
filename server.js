@@ -65,6 +65,35 @@ async function loadTopCoins() {
       };
     });
 
+    // Önemli coinler için sabit CoinGecko URL'leri — hızlı yükleme
+    const staticLogos = {
+      'BTC':  'https://coin-images.coingecko.com/coins/images/1/large/bitcoin.png',
+      'ETH':  'https://coin-images.coingecko.com/coins/images/279/large/ethereum.png',
+      'USDT': 'https://coin-images.coingecko.com/coins/images/325/large/Tether.png',
+      'BNB':  'https://coin-images.coingecko.com/coins/images/825/large/bnb-icon2_2x.png',
+      'SOL':  'https://coin-images.coingecko.com/coins/images/4128/large/solana.png',
+      'XRP':  'https://coin-images.coingecko.com/coins/images/44/large/xrp-symbol-white-128.png',
+      'USDC': 'https://coin-images.coingecko.com/coins/images/6319/large/usdc.png',
+      'DOGE': 'https://coin-images.coingecko.com/coins/images/5/large/dogecoin.png',
+      'ADA':  'https://coin-images.coingecko.com/coins/images/975/large/cardano.png',
+      'TRX':  'https://coin-images.coingecko.com/coins/images/1094/large/tron-logo.png',
+      'AVAX': 'https://coin-images.coingecko.com/coins/images/12559/large/Avalanche_Circle_RedWhite_Trans.png',
+      'LINK': 'https://coin-images.coingecko.com/coins/images/877/large/chainlink-new-logo.png',
+      'DOT':  'https://coin-images.coingecko.com/coins/images/12171/large/polkadot.png',
+      'MATIC':'https://coin-images.coingecko.com/coins/images/4713/large/matic-token-icon.png',
+      'LTC':  'https://coin-images.coingecko.com/coins/images/2/large/litecoin.png',
+      'UNI':  'https://coin-images.coingecko.com/coins/images/12504/large/uni.jpg',
+      'ATOM': 'https://coin-images.coingecko.com/coins/images/1481/large/cosmos_hub.png',
+      'XLM':  'https://coin-images.coingecko.com/coins/images/100/large/Stellar_symbol_black_RGB.png',
+      'BCH':  'https://coin-images.coingecko.com/coins/images/780/large/bitcoin-cash-circle.png',
+      'ETC':  'https://coin-images.coingecko.com/coins/images/453/large/ethereum-classic-logo.png',
+    };
+    Object.entries(staticLogos).forEach(([symbol, url]) => {
+      if (coinMetadata[symbol]) {
+        coinMetadata[symbol].logo = url;
+      }
+    });
+
     console.log('Top 100 coins loaded from CoinGecko');
 
     startWebSocket();
