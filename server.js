@@ -227,7 +227,7 @@ function startWebSocket() {
         high24h:   coinStats[symbol]?.high24h  || 0,
         low24h:    coinStats[symbol]?.low24h   || 0,
         volume24h: coinStats[symbol]?.volume24h || 0,
-        logo:      coinMetadata[symbol].logo,
+        logo:      `https://crypto-live-api.onrender.com/logo/${symbol}`,
         price,
         change,
       };
@@ -243,6 +243,46 @@ function startWebSocket() {
     setTimeout(() => startWebSocket(), 3000);
   });
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /logo/:symbol — CoinGecko logosunu proxy'leyerek döndür
+// ─────────────────────────────────────────────────────────────────────────────
+const logoCache = {};
+
+app.get('/logo/:symbol', async (req, res) => {
+  const symbol = req.params.symbol.toUpperCase();
+  try {
+    // Cache'de varsa direkt döndür
+    if (logoCache[symbol]) {
+      res.set('Content-Type', logoCache[symbol].contentType);
+      res.set('Cache-Control', 'public, max-age=86400');
+      return res.send(logoCache[symbol].data);
+    }
+
+    const logoUrl = coinMetadata[symbol]?.logo;
+    if (!logoUrl) {
+      return res.status(404).send('Logo not found');
+    }
+
+    const response = await axios.get(logoUrl, {
+      responseType: 'arraybuffer',
+      timeout: 8000,
+    });
+
+    const contentType = response.headers['content-type'] || 'image/png';
+    logoCache[symbol] = {
+      data: response.data,
+      contentType,
+    };
+
+    res.set('Content-Type', contentType);
+    res.set('Cache-Control', 'public, max-age=86400');
+    res.send(response.data);
+  } catch (e) {
+    console.log('Logo proxy error:', e.message);
+    res.status(500).send('Logo fetch failed');
+  }
+});
 
 // ─────────────────────────────────────────────────────────────────────────────
 // GET /prices
