@@ -198,7 +198,9 @@ async function loadSparklines() {
         .reverse()
         .slice(-20);
       sparklineCache[symbol] = candles;
-    } catch (_) {}
+    } catch (err) {
+        console.log(`Sparkline error for ${symbol}:`, err.message);
+      }
   }
   console.log('Sparklines loaded');
 }
