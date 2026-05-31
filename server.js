@@ -16,78 +16,88 @@ let totalMarketCap = 0;
 let ws = null;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// CoinLore — Top 100 coin yükle
+// CoinGecko — Top 100 coin + logolar + market cap
 // ─────────────────────────────────────────────────────────────────────────────
 async function loadTopCoins() {
   try {
-    const response = await axios.get('https://api.coinlore.net/api/tickers/');
-    const topCoins = response.data.data.slice(0, 100);
+    const response = await axios.get(
+      'https://api.coingecko.com/api/v3/coins/markets',
+      {
+        params: {
+          vs_currency: 'usd',
+          order: 'market_cap_desc',
+          per_page: 100,
+          page: 1,
+          sparkline: false,
+        },
+        timeout: 10000,
+      }
+    );
 
     orderedSymbols = [];
 
-    topCoins.forEach((coin, index) => {
-      const symbol = coin.symbol;
+    response.data.forEach((coin, index) => {
+      const symbol = coin.symbol.toUpperCase();
       orderedSymbols.push(symbol);
       coinMetadata[symbol] = {
         rank: index + 1,
         symbol,
         name: coin.name,
-        marketCap: Number(coin.market_cap_usd),
-        logo: `https://raw.githubusercontent.com/spothq/cryptocurrency-icons/master/128/color/${symbol.toLowerCase()}.png`,
+        marketCap: Number(coin.market_cap || 0),
+        logo: coin.image || '',
+        geckoId: coin.id,
       };
     });
 
-    console.log('Top 100 coins loaded');
+    console.log('Top 100 coins loaded from CoinGecko');
 
     startWebSocket();
     await loadCoinStats();
     await loadGlobalStats();
-    await loadCoinGeckoLogos();
 
-    // Her 5 dakikada istatistikleri yenile
+    // Her 5 dakikada stats yenile
     setInterval(() => loadCoinStats(), 300000);
     setInterval(() => loadGlobalStats(), 300000);
-    // Her 24 saatte logoları yenile
-    setInterval(() => loadCoinGeckoLogos(), 86400000);
+    // Her 6 saatte coin listesini yenile (logo + marketcap güncellenir)
+    setInterval(() => refreshCoinList(), 21600000);
   } catch (e) {
-    console.log('CoinLore Error:', e.message);
+    console.log('CoinGecko Error:', e.message);
+    // CoinGecko hata verirse tekrar dene
+    setTimeout(() => loadTopCoins(), 10000);
   }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// CoinGecko — Coin logoları yükle
+// CoinGecko — Coin listesini yenile (6 saatte bir)
 // ─────────────────────────────────────────────────────────────────────────────
-async function loadCoinGeckoLogos() {
+async function refreshCoinList() {
   try {
-    for (let page = 1; page <= 2; page++) {
-      const response = await axios.get(
-        'https://api.coingecko.com/api/v3/coins/markets',
-        {
-          params: {
-            vs_currency: 'usd',
-            per_page: 250,
-            page: page,
-            sparkline: false,
-          },
-          timeout: 10000,
-        }
-      );
+    const response = await axios.get(
+      'https://api.coingecko.com/api/v3/coins/markets',
+      {
+        params: {
+          vs_currency: 'usd',
+          order: 'market_cap_desc',
+          per_page: 100,
+          page: 1,
+          sparkline: false,
+        },
+        timeout: 10000,
+      }
+    );
 
-      response.data.forEach((coin) => {
-        const symbol = coin.symbol.toUpperCase();
-        if (coinMetadata[symbol] && coin.image) {
-          coinMetadata[symbol].logo = coin.image;
-        }
-      });
+    response.data.forEach((coin, index) => {
+      const symbol = coin.symbol.toUpperCase();
+      if (coinMetadata[symbol]) {
+        coinMetadata[symbol].marketCap = Number(coin.market_cap || 0);
+        coinMetadata[symbol].logo = coin.image || coinMetadata[symbol].logo;
+        coinMetadata[symbol].rank = index + 1;
+      }
+    });
 
-      // Rate limit için sayfalar arasında bekle
-      if (page < 2) await new Promise((r) => setTimeout(r, 1500));
-    }
-
-    console.log('CoinGecko logos loaded');
+    console.log('Coin list refreshed from CoinGecko');
   } catch (e) {
-    console.log('CoinGecko Logo Error:', e.message);
-    // Hata olursa GitHub logoları kullanmaya devam et
+    console.log('CoinGecko Refresh Error:', e.message);
   }
 }
 
@@ -141,14 +151,11 @@ function startWebSocket() {
 
   ws.on('open', () => {
     console.log('Coinbase WebSocket connected');
-
     const productIds = orderedSymbols.map((s) => `${s}-USD`);
-    ws.send(
-      JSON.stringify({
-        type: 'subscribe',
-        channels: [{ name: 'ticker', product_ids: productIds }],
-      })
-    );
+    ws.send(JSON.stringify({
+      type: 'subscribe',
+      channels: [{ name: 'ticker', product_ids: productIds }],
+    }));
   });
 
   ws.on('message', (msg) => {
@@ -159,29 +166,23 @@ function startWebSocket() {
       const symbol = data.product_id.replace('-USD', '');
       if (!coinMetadata[symbol]) return;
 
-      const price = parseFloat(data.price);
-      const open = parseFloat(data.open_24h);
-      const change = open
-        ? Number((((price - open) / open) * 100).toFixed(2))
+      const price  = parseFloat(data.price);
+      const open   = parseFloat(data.open_24h);
+      const change = open ? Number((((price - open) / open) * 100).toFixed(2)) : 0;
+      const dominance = totalMarketCap > 0
+        ? Number(((coinMetadata[symbol].marketCap / totalMarketCap) * 100).toFixed(2))
         : 0;
 
-      const dominance =
-        totalMarketCap > 0
-          ? Number(
-              ((coinMetadata[symbol].marketCap / totalMarketCap) * 100).toFixed(2)
-            )
-          : 0;
-
       prices[symbol] = {
-        rank: coinMetadata[symbol].rank,
+        rank:      coinMetadata[symbol].rank,
         symbol,
-        name: coinMetadata[symbol].name,
+        name:      coinMetadata[symbol].name,
         marketCap: coinMetadata[symbol].marketCap,
         dominance,
-        high24h: coinStats[symbol]?.high24h || 0,
-        low24h: coinStats[symbol]?.low24h || 0,
+        high24h:   coinStats[symbol]?.high24h  || 0,
+        low24h:    coinStats[symbol]?.low24h   || 0,
         volume24h: coinStats[symbol]?.volume24h || 0,
-        logo: coinMetadata[symbol].logo,
+        logo:      coinMetadata[symbol].logo,
         price,
         change,
       };
@@ -199,7 +200,7 @@ function startWebSocket() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// GET /prices  — tüm canlı fiyatlar
+// GET /prices
 // ─────────────────────────────────────────────────────────────────────────────
 app.get('/prices', (req, res) => {
   const sortedPrices = {};
@@ -211,35 +212,24 @@ app.get('/prices', (req, res) => {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Chart periyot konfigürasyonu
-//
-// Flutter widget'ından gelen "period" değerleri: 1D 1M 3M 6M 1Y 5Y
-//
-// Coinbase Exchange /candles endpoint'i granularity olarak saniye cinsinden
-// tam sayı kabul eder. İzin verilen değerler:
-//   60, 300, 900, 3600, 21600, 86400
-// 5Y için haftalık veri yok; 3 günlük (259200 s) mümkün değil —
-// bu yüzden 5Y'yi 3 ayrı istek (300'er günlük) ile alıp birleştiriyoruz.
 // ─────────────────────────────────────────────────────────────────────────────
 function getChartConfig(period) {
   switch (period) {
-    case '1D':  return { days: 1,    granularity: 3600  }; // 24 mum  (saatlik)
-    case '1M':  return { days: 30,   granularity: 86400 }; // 30 mum  (günlük)
-    case '3M':  return { days: 90,   granularity: 86400 }; // 90 mum  (günlük)
-    case '6M':  return { days: 180,  granularity: 86400 }; // 180 mum (günlük)
-    case '1Y':  return { days: 365,  granularity: 86400 }; // 365 mum (günlük)
-    case '5Y':  return { days: 1825, granularity: 86400 }; // ~5 yıl  (günlük, parçalı istek)
-    default:    return { days: 1,    granularity: 3600  };
+    case '1D': return { days: 1,    granularity: 3600  };
+    case '1M': return { days: 30,   granularity: 86400 };
+    case '3M': return { days: 90,   granularity: 86400 };
+    case '6M': return { days: 180,  granularity: 86400 };
+    case '1Y': return { days: 365,  granularity: 86400 };
+    case '5Y': return { days: 1825, granularity: 86400 };
+    default:   return { days: 1,    granularity: 3600  };
   }
 }
 
-// Coinbase /candles endpoint'i tek seferde max 300 mum döndürür.
-// 300'den fazla mum gereken periyotlar için istekleri böl ve birleştir.
 async function fetchCandles(symbol, startMs, endMs, granularity) {
   const maxCandles = 300;
-  const windowMs = granularity * maxCandles * 1000; // her isteğin kapsadığı ms
-
-  const chunks = [];
-  let chunkEnd = endMs;
+  const windowMs   = granularity * maxCandles * 1000;
+  const chunks     = [];
+  let chunkEnd     = endMs;
 
   while (chunkEnd > startMs) {
     const chunkStart = Math.max(chunkEnd - windowMs, startMs);
@@ -248,7 +238,6 @@ async function fetchCandles(symbol, startMs, endMs, granularity) {
   }
 
   let allCandles = [];
-
   for (const chunk of chunks) {
     try {
       const response = await axios.get(
@@ -256,8 +245,8 @@ async function fetchCandles(symbol, startMs, endMs, granularity) {
         {
           params: {
             start: new Date(chunk.start).toISOString(),
-            end: new Date(chunk.end).toISOString(),
-            granularity: chunk.granularity || granularity,
+            end:   new Date(chunk.end).toISOString(),
+            granularity,
           },
         }
       );
@@ -266,25 +255,18 @@ async function fetchCandles(symbol, startMs, endMs, granularity) {
       console.log(`Candle chunk error (${symbol}):`, e.message);
     }
   }
-
   return allCandles;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // GET /chart/:symbol?period=1D|1M|3M|6M|1Y|5Y
-// Yanıt: [{ time: <unix_saniye>, price: <close_fiyatı> }, ...]
 // ─────────────────────────────────────────────────────────────────────────────
 app.get('/chart/:symbol', async (req, res) => {
   try {
     const symbol = req.params.symbol.toUpperCase();
-
-    // Flutter widget "period" parametresi gönderiyor (1D, 1M, 3M, 6M, 1Y, 5Y)
-    // Eski "range" parametresine de geriye dönük destek ver
     const period = req.query.period || req.query.range || '1D';
-
     const config = getChartConfig(period);
-
-    const endMs = Date.now();
+    const endMs  = Date.now();
     const startMs = endMs - config.days * 24 * 60 * 60 * 1000;
 
     const candles = await fetchCandles(symbol, startMs, endMs, config.granularity);
@@ -293,16 +275,10 @@ app.get('/chart/:symbol', async (req, res) => {
       return res.status(404).json({ error: 'No candle data found' });
     }
 
-    // Coinbase candle formatı: [time, low, high, open, close, volume]
     const chartData = candles
-      .map((c) => ({
-        time: c[0],      // unix saniye
-        price: c[4],     // close fiyatı
-      }))
-      .sort((a, b) => a.time - b.time)  // eskiden yeniye sırala
-      .filter(                           // olası duplikasyonları temizle
-        (item, i, arr) => i === 0 || item.time !== arr[i - 1].time
-      );
+      .map((c) => ({ time: c[0], price: c[4] }))
+      .sort((a, b) => a.time - b.time)
+      .filter((item, i, arr) => i === 0 || item.time !== arr[i - 1].time);
 
     res.json(chartData);
   } catch (e) {
@@ -312,24 +288,21 @@ app.get('/chart/:symbol', async (req, res) => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Korku & Açgözlülük Endeksi — alternative.me (cache: 10 dakika)
+// GET /fng — Korku & Açgözlülük (10 dakika cache)
 // ─────────────────────────────────────────────────────────────────────────────
-let fngCache = null;
+let fngCache     = null;
 let fngLastFetch = 0;
 
 app.get('/fng', async (req, res) => {
   try {
     const now = Date.now();
-    // 10 dakika cache
     if (fngCache && now - fngLastFetch < 10 * 60 * 1000) {
       return res.json(fngCache);
     }
-
     const response = await axios.get(
       'https://api.alternative.me/fng/?limit=1',
       { timeout: 5000 }
     );
-
     const item = response.data.data[0];
     fngCache = {
       value: parseInt(item.value),
@@ -337,11 +310,9 @@ app.get('/fng', async (req, res) => {
       timestamp: item.timestamp,
     };
     fngLastFetch = now;
-
     res.json(fngCache);
   } catch (e) {
     console.log('FNG Error:', e.message);
-    // Cache varsa eski veriyi dön
     if (fngCache) return res.json(fngCache);
     res.status(500).json({ error: e.message });
   }
