@@ -166,9 +166,41 @@ async function loadCoinStats() {
       }
     }
     console.log('Coin stats loaded');
+    // Stats yüklendikten sonra sparkline'ları güncelle
+    await loadSparklines();
   } catch (e) {
     console.log('Stats Error:', e.message);
   }
+}
+
+// Sparkline — son 24s fiyat hareketi (20 nokta)
+const sparklineCache = {};
+
+async function loadSparklines() {
+  for (const symbol of orderedSymbols) {
+    try {
+      const end = new Date();
+      const start = new Date(end.getTime() - 24 * 60 * 60 * 1000);
+      const response = await axios.get(
+        `https://api.exchange.coinbase.com/products/${symbol}-USD/candles`,
+        {
+          params: {
+            start: start.toISOString(),
+            end: end.toISOString(),
+            granularity: 3600,
+          },
+          timeout: 5000,
+        }
+      );
+      // Son 20 noktanın close fiyatlarını al
+      const candles = response.data
+        .map((c) => c[4])
+        .reverse()
+        .slice(-20);
+      sparklineCache[symbol] = candles;
+    } catch (_) {}
+  }
+  console.log('Sparklines loaded');
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -230,6 +262,7 @@ function startWebSocket() {
         logo:      `https://crypto-live-api.onrender.com/logo/${symbol}`,
         price,
         change,
+        sparkline: sparklineCache[symbol] || [],
       };
     } catch (e) {
       console.log('Parse Error:', e.message);
