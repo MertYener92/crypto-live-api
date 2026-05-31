@@ -173,36 +173,48 @@ async function loadCoinStats() {
   }
 }
 
-// Sparkline — son 24s fiyat hareketi (20 nokta)
+// Sparkline — CoinGecko'dan 7 gunluk sparkline (tek istek)
 const sparklineCache = {};
 
 async function loadSparklines() {
-  for (const symbol of orderedSymbols) {
-    try {
-      const end = new Date();
-      const start = new Date(end.getTime() - 24 * 60 * 60 * 1000);
-      const response = await axios.get(
-        `https://api.exchange.coinbase.com/products/${symbol}-USD/candles`,
-        {
-          params: {
-            start: start.toISOString(),
-            end: end.toISOString(),
-            granularity: 3600,
-          },
-          timeout: 5000,
-        }
-      );
-      // Son 20 noktanın close fiyatlarını al
-      const candles = response.data
-        .map((c) => c[4])
-        .reverse()
-        .slice(-20);
-      sparklineCache[symbol] = candles;
-    } catch (err) {
-        console.log(`Sparkline error for ${symbol}:`, err.message);
+  try {
+    // CoinGecko coin ID map
+    const geckoIds = orderedSymbols
+      .map((s) => coinMetadata[s]?.geckoId)
+      .filter(Boolean)
+      .join(',');
+
+    if (!geckoIds) return;
+
+    const response = await axios.get(
+      'https://api.coingecko.com/api/v3/coins/markets',
+      {
+        params: {
+          vs_currency: 'usd',
+          ids: geckoIds,
+          per_page: 250,
+          page: 1,
+          sparkline: true,
+          price_change_percentage: '24h',
+        },
+        timeout: 15000,
       }
+    );
+
+    response.data.forEach((coin) => {
+      const symbol = coin.symbol.toUpperCase();
+      if (coin.sparkline_in_7d && coin.sparkline_in_7d.price) {
+        // Son 24 saati al (24 nokta — saatlik)
+        const prices = coin.sparkline_in_7d.price;
+        const last24 = prices.slice(-24);
+        sparklineCache[symbol] = last24;
+      }
+    });
+
+    console.log('Sparklines loaded from CoinGecko');
+  } catch (e) {
+    console.log('Sparkline Error:', e.message);
   }
-  console.log('Sparklines loaded');
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
