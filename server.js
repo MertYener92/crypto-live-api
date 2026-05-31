@@ -226,7 +226,7 @@ function startWebSocket() {
         dominance,
         high24h:   coinStats[symbol]?.high24h  || 0,
         low24h:    coinStats[symbol]?.low24h   || 0,
-        volume24h: coinStats[symbol]?.volume24h || 0,
+        volume24h: (coinStats[symbol]?.volume24h || 0) * price,
         logo:      `https://crypto-live-api.onrender.com/logo/${symbol}`,
         price,
         change,
