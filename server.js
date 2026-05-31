@@ -105,8 +105,8 @@ async function loadTopCoins() {
     setInterval(() => loadGlobalStats(), 300000);
     // Her 6 saatte coin listesini yenile (logo + marketcap güncellenir)
     setInterval(() => refreshCoinList(), 21600000);
-    await loadSparklines();
-    setInterval(() => loadSparklines(), 1800000);
+    // Sparkline 60 saniye sonra yukle
+    setTimeout(() => { loadSparklines(); setInterval(() => loadSparklines(), 1800000); }, 60000);
   } catch (e) {
     console.log('CoinGecko Error:', e.message);
     // CoinGecko hata verirse tekrar dene
