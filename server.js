@@ -20,19 +20,35 @@ let ws = null;
 // ─────────────────────────────────────────────────────────────────────────────
 async function loadTopCoins() {
   try {
-    const response = await axios.get(
-      'https://api.coingecko.com/api/v3/coins/markets',
-      {
-        params: {
-          vs_currency: 'usd',
-          order: 'market_cap_desc',
-          per_page: 100,
-          page: 1,
-          sparkline: false,
-        },
-        timeout: 10000,
+    // 429 durumunda 60 saniye bekle ve tekrar dene
+    let response;
+    for (let attempt = 1; attempt <= 5; attempt++) {
+      try {
+        response = await axios.get(
+          'https://api.coingecko.com/api/v3/coins/markets',
+          {
+            params: {
+              vs_currency: 'usd',
+              order: 'market_cap_desc',
+              per_page: 100,
+              page: 1,
+              sparkline: false,
+            },
+            timeout: 10000,
+          }
+        );
+        break; // Başarılıysa döngüden çık
+      } catch (err) {
+        if (err.response && err.response.status === 429) {
+          const wait = attempt * 60000; // 1dk, 2dk, 3dk...
+          console.log(`CoinGecko rate limit, ${wait/1000}s sonra tekrar deneniyor...`);
+          await new Promise((r) => setTimeout(r, wait));
+        } else {
+          throw err;
+        }
       }
-    );
+    }
+    if (!response) throw new Error('CoinGecko max retry aşıldı');
 
     orderedSymbols = [];
 
