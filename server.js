@@ -42,12 +42,52 @@ async function loadTopCoins() {
     startWebSocket();
     await loadCoinStats();
     await loadGlobalStats();
+    await loadCoinGeckoLogos();
 
     // Her 5 dakikada istatistikleri yenile
     setInterval(() => loadCoinStats(), 300000);
     setInterval(() => loadGlobalStats(), 300000);
+    // Her 24 saatte logoları yenile
+    setInterval(() => loadCoinGeckoLogos(), 86400000);
   } catch (e) {
     console.log('CoinLore Error:', e.message);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CoinGecko — Coin logoları yükle
+// ─────────────────────────────────────────────────────────────────────────────
+async function loadCoinGeckoLogos() {
+  try {
+    for (let page = 1; page <= 2; page++) {
+      const response = await axios.get(
+        'https://api.coingecko.com/api/v3/coins/markets',
+        {
+          params: {
+            vs_currency: 'usd',
+            per_page: 250,
+            page: page,
+            sparkline: false,
+          },
+          timeout: 10000,
+        }
+      );
+
+      response.data.forEach((coin) => {
+        const symbol = coin.symbol.toUpperCase();
+        if (coinMetadata[symbol] && coin.image) {
+          coinMetadata[symbol].logo = coin.image;
+        }
+      });
+
+      // Rate limit için sayfalar arasında bekle
+      if (page < 2) await new Promise((r) => setTimeout(r, 1500));
+    }
+
+    console.log('CoinGecko logos loaded');
+  } catch (e) {
+    console.log('CoinGecko Logo Error:', e.message);
+    // Hata olursa GitHub logoları kullanmaya devam et
   }
 }
 
