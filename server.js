@@ -65,6 +65,25 @@ async function loadTopCoins() {
       };
     });
 
+    // Önemli coinler için güvenilir fallback logoları (coincap CDN)
+    const fallbackLogos = {
+      'BTC':  'https://assets.coincap.io/assets/icons/btc@2x.png',
+      'ETH':  'https://assets.coincap.io/assets/icons/eth@2x.png',
+      'SOL':  'https://assets.coincap.io/assets/icons/sol@2x.png',
+      'BNB':  'https://assets.coincap.io/assets/icons/bnb@2x.png',
+      'XRP':  'https://assets.coincap.io/assets/icons/xrp@2x.png',
+      'USDT': 'https://assets.coincap.io/assets/icons/usdt@2x.png',
+      'USDC': 'https://assets.coincap.io/assets/icons/usdc@2x.png',
+      'DOGE': 'https://assets.coincap.io/assets/icons/doge@2x.png',
+      'ADA':  'https://assets.coincap.io/assets/icons/ada@2x.png',
+      'TRX':  'https://assets.coincap.io/assets/icons/trx@2x.png',
+    };
+    Object.entries(fallbackLogos).forEach(([symbol, url]) => {
+      if (coinMetadata[symbol]) {
+        coinMetadata[symbol].logo = url;
+      }
+    });
+
     console.log('Top 100 coins loaded from CoinGecko');
 
     startWebSocket();
