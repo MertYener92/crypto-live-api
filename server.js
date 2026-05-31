@@ -177,44 +177,30 @@ async function loadCoinStats() {
 const sparklineCache = {};
 
 async function loadSparklines() {
-  try {
-    // CoinGecko coin ID map
-    const geckoIds = orderedSymbols
-      .map((s) => coinMetadata[s]?.geckoId)
-      .filter(Boolean)
-      .join(',');
-
-    if (!geckoIds) return;
-
-    const response = await axios.get(
-      'https://api.coingecko.com/api/v3/coins/markets',
-      {
-        params: {
-          vs_currency: 'usd',
-          ids: geckoIds,
-          per_page: 250,
-          page: 1,
-          sparkline: true,
-          price_change_percentage: '24h',
-        },
-        timeout: 15000,
+  const promises = orderedSymbols.map(async (symbol) => {
+    try {
+      const end = new Date();
+      const start = new Date(end.getTime() - 24 * 60 * 60 * 1000);
+      const response = await axios.get(
+        `https://api.exchange.coinbase.com/products/${symbol}-USD/candles`,
+        {
+          params: {
+            start: start.toISOString(),
+            end: end.toISOString(),
+            granularity: 3600,
+          },
+          timeout: 5000,
+        }
+      );
+      if (response.data && response.data.length > 0) {
+        const candles = response.data.map((c) => c[4]).reverse().slice(-24);
+        sparklineCache[symbol] = candles;
       }
-    );
-
-    response.data.forEach((coin) => {
-      const symbol = coin.symbol.toUpperCase();
-      if (coin.sparkline_in_7d && coin.sparkline_in_7d.price) {
-        // Son 24 saati al (24 nokta — saatlik)
-        const prices = coin.sparkline_in_7d.price;
-        const last24 = prices.slice(-24);
-        sparklineCache[symbol] = last24;
-      }
-    });
-
-    console.log('Sparklines loaded from CoinGecko');
-  } catch (e) {
-    console.log('Sparkline Error:', e.message);
-  }
+    } catch (_) {}
+  });
+  // Paralel calistir - hepsini ayni anda iste
+  await Promise.allSettled(promises);
+  console.log('Sparklines loaded from Coinbase');
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
