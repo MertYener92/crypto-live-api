@@ -383,7 +383,12 @@ app.get('/logo/:symbol', async (req, res) => {
 app.get('/prices', (req, res) => {
   const result = {};
   orderedSymbols.forEach((symbol) => {
-    if (prices[symbol]) result[symbol] = prices[symbol];
+    if (prices[symbol]) {
+      result[symbol] = {
+        ...prices[symbol],
+        sparkline: sparklineCache[symbol] || prices[symbol].sparkline || [],
+      };
+    }
   });
   res.json(result);
 });
