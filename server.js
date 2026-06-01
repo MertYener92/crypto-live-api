@@ -220,7 +220,10 @@ async function loadSparklines() {
       );
       if (response.data && response.data.length > 0) {
         sparklineCache[symbol] = response.data.map((c) => c[4]).reverse().slice(-24);
-        if (prices[symbol]) prices[symbol].sparkline = sparklineCache[symbol];
+        // prices varsa guncelle, yoksa cache'de beklesin
+        if (prices[symbol]) {
+          prices[symbol].sparkline = sparklineCache[symbol];
+        }
       }
     } catch (_) {}
   });
@@ -320,11 +323,11 @@ async function initialize() {
     startWebSocket();
     loadCoinStats();
 
-    // 5. Sparkline 60sn sonra
+    // 5. Sparkline 2dk sonra yukle - prices dolmus olsun
     setTimeout(() => {
       loadSparklines();
       setInterval(() => loadSparklines(), 1800000);
-    }, 60000);
+    }, 120000);
 
     // 6. CoinGecko'dan taze metadata cek ve Supabase'e kaydet
     // Cache varsa 5dk bekle, yoksa hemen basla
