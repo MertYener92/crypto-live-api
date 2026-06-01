@@ -20,7 +20,7 @@ const sparklineCache = {};
 // ─────────────────────────────────────────────────────────────────────────────
 async function loadBinanceSymbols() {
   const response = await axios.get(
-    'https://api.binance.com/api/v3/exchangeInfo',
+    'https://api.binance.us/api/v3/exchangeInfo',
     { timeout: 10000 }
   );
 
@@ -134,7 +134,7 @@ async function loadCoinGeckoMetadata(binanceSymbols) {
 async function loadBinanceTickers() {
   try {
     const response = await axios.get(
-      'https://api.binance.com/api/v3/ticker/24hr',
+      'https://api.binance.us/api/v3/ticker/24hr',
       { timeout: 10000 }
     );
 
@@ -178,7 +178,7 @@ function startWebSocket() {
   if (ws) ws.close();
 
   // Binance mini ticker stream — tüm USDT çiftleri
-  ws = new WebSocket('wss://stream.binance.com:9443/ws/!miniTicker@arr');
+  ws = new WebSocket('wss://stream.binance.us:9443/ws/!miniTicker@arr');
 
   ws.on('open', () => {
     console.log('Binance WebSocket connected');
@@ -228,7 +228,7 @@ async function loadSparklines() {
   const promises = orderedSymbols.map(async (symbol) => {
     try {
       const response = await axios.get(
-        'https://api.binance.com/api/v3/klines',
+        'https://api.binance.us/api/v3/klines',
         {
           params: {
             symbol: `${symbol}USDT`,
@@ -419,7 +419,7 @@ app.get('/chart/:symbol', async (req, res) => {
     const config = getChartConfig(period);
 
     const response = await axios.get(
-      'https://api.binance.com/api/v3/klines',
+      'https://api.binance.us/api/v3/klines',
       {
         params: {
           symbol: `${symbol}USDT`,
