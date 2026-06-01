@@ -173,6 +173,7 @@ const sparklineCache = {};
 
 async function loadSparklines() {
   const promises = orderedSymbols.map(async (symbol) => {
+    // Önce Coinbase'i dene
     try {
       const end = new Date();
       const start = new Date(end.getTime() - 24 * 60 * 60 * 1000);
@@ -188,13 +189,30 @@ async function loadSparklines() {
         }
       );
       if (response.data && response.data.length > 0) {
-        const candles = response.data.map((c) => c[4]).reverse().slice(-24);
-        sparklineCache[symbol] = candles;
+        sparklineCache[symbol] = response.data.map((c) => c[4]).reverse().slice(-24);
+        return;
+      }
+    } catch (_) {}
+
+    // Coinbase yoksa CoinGecko'dan çek
+    try {
+      const geckoId = coinMetadata[symbol]?.geckoId;
+      if (!geckoId) return;
+      const response = await axios.get(
+        `https://api.coingecko.com/api/v3/coins/${geckoId}/market_chart`,
+        {
+          params: { vs_currency: 'usd', days: 1, interval: 'hourly' },
+          timeout: 8000,
+        }
+      );
+      if (response.data?.prices?.length > 0) {
+        sparklineCache[symbol] = response.data.prices.map((p) => p[1]).slice(-24);
       }
     } catch (_) {}
   });
+
   await Promise.allSettled(promises);
-  console.log('Sparklines loaded from Coinbase');
+  console.log('Sparklines loaded');
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
