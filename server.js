@@ -24,6 +24,7 @@ const sparklineCache = {};
 // ─────────────────────────────────────────────────────────────────────────────
 async function loadMetadataFromSupabase() {
   try {
+    console.log('Supabase metadata yukleniyor...');
     const response = await axios.get(
       `${SUPABASE_URL}/rest/v1/coin_metadata?select=*&limit=2000`,
       {
@@ -34,6 +35,8 @@ async function loadMetadataFromSupabase() {
         timeout: 10000,
       }
     );
+
+    console.log(`Supabase response status: ${response.status}, kayit sayisi: ${response.data?.length}`);
 
     if (response.data && response.data.length > 0) {
       response.data.forEach((row) => {
@@ -49,9 +52,10 @@ async function loadMetadataFromSupabase() {
       console.log(`Supabase'den ${response.data.length} coin metadata yuklendi`);
       return true;
     }
+    console.log('Supabase bos dondu');
     return false;
   } catch (e) {
-    console.log('Supabase okuma hatasi:', e.message);
+    console.log('Supabase okuma hatasi:', e.message, e.response?.status, e.response?.data);
     return false;
   }
 }
