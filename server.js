@@ -9,36 +9,35 @@ app.use(cors());
 const PORT = process.env.PORT || 10000;
 
 let prices = {};
-let orderedSymbols = [];   // Coinbase USD çiftleri
-let coinMetadata = {};     // CoinGecko'dan logo + marketcap + rank
-let coinStats = {};
+let orderedSymbols = [];
+let coinMetadata = {};
 let totalMarketCap = 0;
 let ws = null;
+const sparklineCache = {};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ADIM 1: Coinbase'deki tüm USD coinlerini çek
+// ADIM 1: Binance'deki tüm USDT çiftlerini çek
 // ─────────────────────────────────────────────────────────────────────────────
-async function loadCoinbaseSymbols() {
+async function loadBinanceSymbols() {
   const response = await axios.get(
-    'https://api.exchange.coinbase.com/products',
+    'https://api.binance.com/api/v3/exchangeInfo',
     { timeout: 10000 }
   );
 
-  const usdPairs = response.data.filter(
-    (p) => p.quote_currency === 'USD' && p.status === 'online'
+  const usdtPairs = response.data.symbols.filter(
+    (s) => s.quoteAsset === 'USDT' && s.status === 'TRADING'
   );
 
-  const symbols = usdPairs.map((p) => p.base_currency.toUpperCase());
-  console.log(`Coinbase'de ${symbols.length} aktif USD coini bulundu`);
+  const symbols = usdtPairs.map((s) => s.baseAsset.toUpperCase());
+  console.log(`Binance'de ${symbols.length} aktif USDT coini bulundu`);
   return symbols;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ADIM 2: CoinGecko'dan metadata çek (logo, marketcap, rank)
-// Coinbase sembol listesiyle eşleştir
 // ─────────────────────────────────────────────────────────────────────────────
-async function loadCoinGeckoMetadata(coinbaseSymbols) {
-  const symbolSet = new Set(coinbaseSymbols);
+async function loadCoinGeckoMetadata(binanceSymbols) {
+  const symbolSet = new Set(binanceSymbols);
   let matched = 0;
 
   for (let page = 1; page <= 4; page++) {
@@ -74,23 +73,23 @@ async function loadCoinGeckoMetadata(coinbaseSymbols) {
           }
         });
 
-        console.log(`CoinGecko sayfa ${page} yüklendi`);
+        console.log(`CoinGecko sayfa ${page} yuklendi`);
         success = true;
         break;
       } catch (e) {
-        const wait = attempt * 30000; // 30sn, 60sn, 90sn...
-        console.log(`CoinGecko sayfa ${page} hata (deneme ${attempt}), ${wait/1000}sn bekleniyor...`);
+        const wait = attempt * 30000;
+        console.log(`CoinGecko sayfa ${page} hata (deneme ${attempt}), ${wait / 1000}sn bekleniyor...`);
         await new Promise((r) => setTimeout(r, wait));
       }
     }
-    if (!success) console.log(`CoinGecko sayfa ${page} atlandı`);
-    // Sayfalar arası 15sn bekle
+    if (!success) console.log(`CoinGecko sayfa ${page} atlandi`);
     if (page < 4) await new Promise((r) => setTimeout(r, 15000));
   }
 
-  console.log(`CoinGecko'dan ${matched} coin eşleştirildi`);
+  console.log(`CoinGecko'dan ${matched} coin eslesti`);
 
-  coinbaseSymbols.forEach((symbol) => {
+  // Eslesmeyenler icin basit metadata
+  binanceSymbols.forEach((symbol) => {
     if (!coinMetadata[symbol]) {
       coinMetadata[symbol] = {
         rank: 9999,
@@ -103,25 +102,26 @@ async function loadCoinGeckoMetadata(coinbaseSymbols) {
     }
   });
 
+  // Sabit logolar
   const staticLogos = {
-    'BTC':  'https://coin-images.coingecko.com/coins/images/1/large/bitcoin.png',
-    'ETH':  'https://coin-images.coingecko.com/coins/images/279/large/ethereum.png',
-    'USDT': 'https://coin-images.coingecko.com/coins/images/325/large/Tether.png',
-    'BNB':  'https://coin-images.coingecko.com/coins/images/825/large/bnb-icon2_2x.png',
-    'SOL':  'https://coin-images.coingecko.com/coins/images/4128/large/solana.png',
-    'XRP':  'https://coin-images.coingecko.com/coins/images/44/large/xrp-symbol-white-128.png',
-    'USDC': 'https://coin-images.coingecko.com/coins/images/6319/large/usdc.png',
-    'DOGE': 'https://coin-images.coingecko.com/coins/images/5/large/dogecoin.png',
-    'ADA':  'https://coin-images.coingecko.com/coins/images/975/large/cardano.png',
-    'AVAX': 'https://coin-images.coingecko.com/coins/images/12559/large/Avalanche_Circle_RedWhite_Trans.png',
-    'LINK': 'https://coin-images.coingecko.com/coins/images/877/large/chainlink-new-logo.png',
-    'DOT':  'https://coin-images.coingecko.com/coins/images/12171/large/polkadot.png',
-    'LTC':  'https://coin-images.coingecko.com/coins/images/2/large/litecoin.png',
-    'UNI':  'https://coin-images.coingecko.com/coins/images/12504/large/uni.jpg',
-    'ATOM': 'https://coin-images.coingecko.com/coins/images/1481/large/cosmos_hub.png',
-    'XLM':  'https://coin-images.coingecko.com/coins/images/100/large/Stellar_symbol_black_RGB.png',
-    'BCH':  'https://coin-images.coingecko.com/coins/images/780/large/bitcoin-cash-circle.png',
-    'ETC':  'https://coin-images.coingecko.com/coins/images/453/large/ethereum-classic-logo.png',
+    BTC:  'https://coin-images.coingecko.com/coins/images/1/large/bitcoin.png',
+    ETH:  'https://coin-images.coingecko.com/coins/images/279/large/ethereum.png',
+    USDT: 'https://coin-images.coingecko.com/coins/images/325/large/Tether.png',
+    BNB:  'https://coin-images.coingecko.com/coins/images/825/large/bnb-icon2_2x.png',
+    SOL:  'https://coin-images.coingecko.com/coins/images/4128/large/solana.png',
+    XRP:  'https://coin-images.coingecko.com/coins/images/44/large/xrp-symbol-white-128.png',
+    USDC: 'https://coin-images.coingecko.com/coins/images/6319/large/usdc.png',
+    DOGE: 'https://coin-images.coingecko.com/coins/images/5/large/dogecoin.png',
+    ADA:  'https://coin-images.coingecko.com/coins/images/975/large/cardano.png',
+    AVAX: 'https://coin-images.coingecko.com/coins/images/12559/large/Avalanche_Circle_RedWhite_Trans.png',
+    LINK: 'https://coin-images.coingecko.com/coins/images/877/large/chainlink-new-logo.png',
+    DOT:  'https://coin-images.coingecko.com/coins/images/12171/large/polkadot.png',
+    LTC:  'https://coin-images.coingecko.com/coins/images/2/large/litecoin.png',
+    UNI:  'https://coin-images.coingecko.com/coins/images/12504/large/uni.jpg',
+    ATOM: 'https://coin-images.coingecko.com/coins/images/1481/large/cosmos_hub.png',
+    XLM:  'https://coin-images.coingecko.com/coins/images/100/large/Stellar_symbol_black_RGB.png',
+    BCH:  'https://coin-images.coingecko.com/coins/images/780/large/bitcoin-cash-circle.png',
+    ETC:  'https://coin-images.coingecko.com/coins/images/453/large/ethereum-classic-logo.png',
   };
   Object.entries(staticLogos).forEach(([symbol, url]) => {
     if (coinMetadata[symbol]) coinMetadata[symbol].logo = url;
@@ -129,134 +129,124 @@ async function loadCoinGeckoMetadata(coinbaseSymbols) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Ana başlatma
+// ADIM 3: Binance 24s ticker — fiyat, değişim, hacim, high, low
 // ─────────────────────────────────────────────────────────────────────────────
-async function initialize() {
+async function loadBinanceTickers() {
   try {
-    // 1. Coinbase sembollerini al
-    const coinbaseSymbols = await loadCoinbaseSymbols();
-    orderedSymbols = coinbaseSymbols;
+    const response = await axios.get(
+      'https://api.binance.com/api/v3/ticker/24hr',
+      { timeout: 10000 }
+    );
 
-    // 2. CoinGecko metadata — 10sn bekle sonra başla (rate limit önlemi)
-    await new Promise((r) => setTimeout(r, 10000));
-    await loadCoinGeckoMetadata(coinbaseSymbols);
+    response.data.forEach((ticker) => {
+      if (!ticker.symbol.endsWith('USDT')) return;
+      const symbol = ticker.symbol.replace('USDT', '');
+      if (!coinMetadata[symbol]) return;
 
-    // 3. Sırala: CoinGecko rank'e göre (rank'i olmayanlar sona)
-    orderedSymbols.sort((a, b) => {
-      const ra = coinMetadata[a]?.rank || 9999;
-      const rb = coinMetadata[b]?.rank || 9999;
-      return ra - rb;
+      const price = parseFloat(ticker.lastPrice);
+      const change = parseFloat(ticker.priceChangePercent);
+      const dominance = totalMarketCap > 0
+        ? Number(((coinMetadata[symbol].marketCap / totalMarketCap) * 100).toFixed(2))
+        : 0;
+
+      prices[symbol] = {
+        rank:      coinMetadata[symbol].rank,
+        symbol,
+        name:      coinMetadata[symbol].name,
+        marketCap: coinMetadata[symbol].marketCap,
+        dominance,
+        high24h:   parseFloat(ticker.highPrice),
+        low24h:    parseFloat(ticker.lowPrice),
+        volume24h: parseFloat(ticker.quoteVolume),
+        logo:      `https://crypto-live-api.onrender.com/logo/${symbol}`,
+        price,
+        change:    Number(change.toFixed(2)),
+        sparkline: sparklineCache[symbol] || [],
+      };
     });
 
-    console.log(`Toplam ${orderedSymbols.length} coin hazır`);
-
-    // 4. WebSocket + stats başlat
-    startWebSocket();
-    await loadCoinStats();
-    await loadGlobalStats();
-
-    // 5. Sparkline 60sn sonra yükle
-    setTimeout(() => {
-      loadSparklines();
-      setInterval(() => loadSparklines(), 1800000);
-    }, 60000);
-
-    // 6. Periyodik yenileme
-    setInterval(() => loadCoinStats(), 300000);
-    setInterval(() => loadGlobalStats(), 300000);
-    setInterval(() => refreshMetadata(), 21600000);
+    console.log(`Binance ticker yuklendi: ${Object.keys(prices).length} coin`);
   } catch (e) {
-    console.log('Initialize Error:', e.message);
-    setTimeout(() => initialize(), 10000);
+    console.log('Binance Ticker Error:', e.message);
   }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Metadata yenile (6 saatte bir)
+// Binance WebSocket — canlı fiyat güncellemeleri
 // ─────────────────────────────────────────────────────────────────────────────
-async function refreshMetadata() {
-  try {
-    for (let page = 1; page <= 4; page++) {
-      const response = await axios.get(
-        'https://api.coingecko.com/api/v3/coins/markets',
-        {
-          params: {
-            vs_currency: 'usd',
-            order: 'market_cap_desc',
-            per_page: 125,
-            page,
-            sparkline: false,
-          },
-          timeout: 10000,
-        }
-      );
-      response.data.forEach((coin) => {
-        const symbol = coin.symbol.toUpperCase();
-        if (coinMetadata[symbol]) {
-          coinMetadata[symbol].marketCap = Number(coin.market_cap || 0);
-          coinMetadata[symbol].rank = coin.market_cap_rank || coinMetadata[symbol].rank;
-          if (coin.image) coinMetadata[symbol].logo = coin.image;
-        }
-      });
-      if (page < 4) await new Promise((r) => setTimeout(r, 2000));
-    }
-    console.log('Metadata refreshed');
-  } catch (e) {
-    console.log('Metadata Refresh Error:', e.message);
-  }
-}
+function startWebSocket() {
+  if (ws) ws.close();
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Coinbase REST — 24s istatistikler
-// ─────────────────────────────────────────────────────────────────────────────
-async function loadCoinStats() {
-  try {
-    for (const symbol of orderedSymbols) {
-      try {
-        const response = await axios.get(
-          `https://api.exchange.coinbase.com/products/${symbol}-USD/stats`
-        );
-        coinStats[symbol] = {
-          high24h: Number(response.data.high),
-          low24h: Number(response.data.low),
-          volume24h: Number(response.data.volume),
+  // Binance mini ticker stream — tüm USDT çiftleri
+  ws = new WebSocket('wss://stream.binance.com:9443/ws/!miniTicker@arr');
+
+  ws.on('open', () => {
+    console.log('Binance WebSocket connected');
+  });
+
+  ws.on('message', (msg) => {
+    try {
+      const tickers = JSON.parse(msg.toString());
+      if (!Array.isArray(tickers)) return;
+
+      tickers.forEach((ticker) => {
+        if (!ticker.s.endsWith('USDT')) return;
+        const symbol = ticker.s.replace('USDT', '');
+        if (!coinMetadata[symbol] || !prices[symbol]) return;
+
+        const price = parseFloat(ticker.c);
+        const open  = parseFloat(ticker.o);
+        const change = open > 0 ? Number((((price - open) / open) * 100).toFixed(2)) : 0;
+
+        prices[symbol] = {
+          ...prices[symbol],
+          price,
+          change,
+          high24h:   parseFloat(ticker.h),
+          low24h:    parseFloat(ticker.l),
+          volume24h: parseFloat(ticker.q),
+          sparkline: sparklineCache[symbol] || prices[symbol].sparkline || [],
         };
-      } catch (_) {}
+      });
+    } catch (e) {
+      console.log('WS Parse Error:', e.message);
     }
-    console.log('Coin stats loaded');
-  } catch (e) {
-    console.log('Stats Error:', e.message);
-  }
+  });
+
+  ws.on('error', (err) => console.log('WebSocket Error:', err.message));
+
+  ws.on('close', () => {
+    console.log('WebSocket closed. Reconnecting in 3s...');
+    setTimeout(() => startWebSocket(), 3000);
+  });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Sparkline — Coinbase candles (hepsi Coinbase'de olduğu için direkt çeker)
+// Sparkline — Binance kline (1s, 1 saatlik mum)
 // ─────────────────────────────────────────────────────────────────────────────
-const sparklineCache = {};
-
 async function loadSparklines() {
   const promises = orderedSymbols.map(async (symbol) => {
     try {
-      const end = new Date();
-      const start = new Date(end.getTime() - 24 * 60 * 60 * 1000);
       const response = await axios.get(
-        `https://api.exchange.coinbase.com/products/${symbol}-USD/candles`,
+        'https://api.binance.com/api/v3/klines',
         {
           params: {
-            start: start.toISOString(),
-            end: end.toISOString(),
-            granularity: 3600,
+            symbol: `${symbol}USDT`,
+            interval: '1h',
+            limit: 24,
           },
           timeout: 5000,
         }
       );
       if (response.data && response.data.length > 0) {
-        sparklineCache[symbol] = response.data.map((c) => c[4]).reverse().slice(-24);
+        sparklineCache[symbol] = response.data.map((c) => parseFloat(c[4]));
+        if (prices[symbol]) prices[symbol].sparkline = sparklineCache[symbol];
       }
     } catch (_) {}
   });
+
   await Promise.allSettled(promises);
-  console.log('Sparklines loaded');
+  console.log('Sparklines loaded from Binance');
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -273,64 +263,93 @@ async function loadGlobalStats() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Coinbase WebSocket — canlı fiyatlar
+// Metadata yenile (6 saatte bir)
 // ─────────────────────────────────────────────────────────────────────────────
-function startWebSocket() {
-  if (ws) ws.close();
-
-  ws = new WebSocket('wss://ws-feed.exchange.coinbase.com', {
-    perMessageDeflate: false,
-  });
-
-  ws.on('open', () => {
-    console.log('Coinbase WebSocket connected');
-    const productIds = orderedSymbols.map((s) => `${s}-USD`);
-    ws.send(JSON.stringify({
-      type: 'subscribe',
-      channels: [{ name: 'ticker', product_ids: productIds }],
-    }));
-  });
-
-  ws.on('message', (msg) => {
-    try {
-      const data = JSON.parse(msg.toString());
-      if (data.type !== 'ticker') return;
-
-      const symbol = data.product_id.replace('-USD', '');
-      if (!coinMetadata[symbol]) return;
-
-      const price    = parseFloat(data.price);
-      const open     = parseFloat(data.open_24h);
-      const change   = open ? Number((((price - open) / open) * 100).toFixed(2)) : 0;
-      const dominance = totalMarketCap > 0
-        ? Number(((coinMetadata[symbol].marketCap / totalMarketCap) * 100).toFixed(2))
-        : 0;
-
-      prices[symbol] = {
-        rank:      coinMetadata[symbol].rank,
-        symbol,
-        name:      coinMetadata[symbol].name,
-        marketCap: coinMetadata[symbol].marketCap,
-        dominance,
-        high24h:   coinStats[symbol]?.high24h  || 0,
-        low24h:    coinStats[symbol]?.low24h   || 0,
-        volume24h: (coinStats[symbol]?.volume24h || 0) * price,
-        logo:      `https://crypto-live-api.onrender.com/logo/${symbol}`,
-        price,
-        change,
-        sparkline: sparklineCache[symbol] || [],
-      };
-    } catch (e) {
-      console.log('Parse Error:', e.message);
+async function refreshMetadata() {
+  try {
+    for (let page = 1; page <= 4; page++) {
+      try {
+        const response = await axios.get(
+          'https://api.coingecko.com/api/v3/coins/markets',
+          {
+            params: {
+              vs_currency: 'usd',
+              order: 'market_cap_desc',
+              per_page: 125,
+              page,
+              sparkline: false,
+            },
+            timeout: 10000,
+          }
+        );
+        response.data.forEach((coin) => {
+          const symbol = coin.symbol.toUpperCase();
+          if (coinMetadata[symbol]) {
+            coinMetadata[symbol].marketCap = Number(coin.market_cap || 0);
+            coinMetadata[symbol].rank = coin.market_cap_rank || coinMetadata[symbol].rank;
+            if (coin.image) coinMetadata[symbol].logo = coin.image;
+          }
+        });
+      } catch (_) {}
+      if (page < 4) await new Promise((r) => setTimeout(r, 15000));
     }
-  });
+    console.log('Metadata refreshed');
+  } catch (e) {
+    console.log('Metadata Refresh Error:', e.message);
+  }
+}
 
-  ws.on('error', (err) => console.log('WebSocket Error:', err.message));
+// ─────────────────────────────────────────────────────────────────────────────
+// Ana başlatma
+// ─────────────────────────────────────────────────────────────────────────────
+async function initialize() {
+  try {
+    // 1. Binance sembollerini al
+    const binanceSymbols = await loadBinanceSymbols();
+    orderedSymbols = binanceSymbols;
 
-  ws.on('close', () => {
-    console.log('WebSocket closed. Reconnecting in 3s...');
-    setTimeout(() => startWebSocket(), 3000);
-  });
+    // 2. Binance 24s ticker ile fiyatları başlat
+    await loadGlobalStats();
+    await loadBinanceTickers();
+
+    // 3. Sırala: market cap rank'e göre (önce bilinen coinler)
+    orderedSymbols.sort((a, b) => {
+      const ra = coinMetadata[a]?.rank || 9999;
+      const rb = coinMetadata[b]?.rank || 9999;
+      return ra - rb;
+    });
+
+    // 4. WebSocket başlat
+    startWebSocket();
+
+    // 5. CoinGecko metadata — 15sn sonra başla (rate limit önlemi)
+    setTimeout(async () => {
+      await loadCoinGeckoMetadata(binanceSymbols);
+      // Metadata geldikten sonra tekrar sırala
+      orderedSymbols.sort((a, b) => {
+        const ra = coinMetadata[a]?.rank || 9999;
+        const rb = coinMetadata[b]?.rank || 9999;
+        return ra - rb;
+      });
+      console.log(`Toplam ${orderedSymbols.length} coin hazir`);
+    }, 15000);
+
+    // 6. Sparkline 60sn sonra yükle
+    setTimeout(() => {
+      loadSparklines();
+      setInterval(() => loadSparklines(), 1800000);
+    }, 60000);
+
+    // 7. Periyodik yenileme
+    setInterval(() => loadBinanceTickers(), 60000);
+    setInterval(() => loadGlobalStats(), 300000);
+    setInterval(() => refreshMetadata(), 21600000);
+
+    console.log(`Sunucu hazir, ${orderedSymbols.length} coin yuklendi`);
+  } catch (e) {
+    console.log('Initialize Error:', e.message);
+    setTimeout(() => initialize(), 10000);
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -379,71 +398,46 @@ app.get('/prices', (req, res) => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Chart
+// GET /chart/:symbol?period=1D|1M|3M|6M|1Y|5Y
 // ─────────────────────────────────────────────────────────────────────────────
 function getChartConfig(period) {
   switch (period) {
-    case '1D': return { days: 1,    granularity: 3600  };
-    case '1M': return { days: 30,   granularity: 86400 };
-    case '3M': return { days: 90,   granularity: 86400 };
-    case '6M': return { days: 180,  granularity: 86400 };
-    case '1Y': return { days: 365,  granularity: 86400 };
-    case '5Y': return { days: 1825, granularity: 86400 };
-    default:   return { days: 1,    granularity: 3600  };
+    case '1D': return { interval: '1h',  limit: 24  };
+    case '1M': return { interval: '1d',  limit: 30  };
+    case '3M': return { interval: '1d',  limit: 90  };
+    case '6M': return { interval: '1d',  limit: 180 };
+    case '1Y': return { interval: '1w',  limit: 52  };
+    case '5Y': return { interval: '1M',  limit: 60  };
+    default:   return { interval: '1h',  limit: 24  };
   }
-}
-
-async function fetchCandles(symbol, startMs, endMs, granularity) {
-  const maxCandles = 300;
-  const windowMs   = granularity * maxCandles * 1000;
-  const chunks     = [];
-  let chunkEnd     = endMs;
-
-  while (chunkEnd > startMs) {
-    const chunkStart = Math.max(chunkEnd - windowMs, startMs);
-    chunks.push({ start: chunkStart, end: chunkEnd });
-    chunkEnd = chunkStart;
-  }
-
-  let allCandles = [];
-  for (const chunk of chunks) {
-    try {
-      const response = await axios.get(
-        `https://api.exchange.coinbase.com/products/${symbol}-USD/candles`,
-        {
-          params: {
-            start: new Date(chunk.start).toISOString(),
-            end:   new Date(chunk.end).toISOString(),
-            granularity,
-          },
-        }
-      );
-      allCandles = allCandles.concat(response.data);
-    } catch (e) {
-      console.log(`Candle chunk error (${symbol}):`, e.message);
-    }
-  }
-  return allCandles;
 }
 
 app.get('/chart/:symbol', async (req, res) => {
   try {
     const symbol = req.params.symbol.toUpperCase();
-    const period = req.query.period || req.query.range || '1D';
+    const period = req.query.period || '1D';
     const config = getChartConfig(period);
-    const endMs  = Date.now();
-    const startMs = endMs - config.days * 24 * 60 * 60 * 1000;
 
-    const candles = await fetchCandles(symbol, startMs, endMs, config.granularity);
+    const response = await axios.get(
+      'https://api.binance.com/api/v3/klines',
+      {
+        params: {
+          symbol: `${symbol}USDT`,
+          interval: config.interval,
+          limit: config.limit,
+        },
+        timeout: 10000,
+      }
+    );
 
-    if (!candles || candles.length === 0) {
+    if (!response.data || response.data.length === 0) {
       return res.status(404).json({ error: 'No candle data found' });
     }
 
-    const chartData = candles
-      .map((c) => ({ time: c[0], price: c[4] }))
-      .sort((a, b) => a.time - b.time)
-      .filter((item, i, arr) => i === 0 || item.time !== arr[i - 1].time);
+    const chartData = response.data.map((c) => ({
+      time: Math.floor(c[0] / 1000),
+      price: parseFloat(c[4]),
+    }));
 
     res.json(chartData);
   } catch (e) {
