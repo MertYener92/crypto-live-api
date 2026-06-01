@@ -205,20 +205,19 @@ function startWebSocket() {
       if (data.type !== 'ticker') return;
 
       const symbol = data.product_id.replace('-USD', '');
-      if (!coinMetadata[symbol]) return;
-
-      const price     = parseFloat(data.price);
-      const open      = parseFloat(data.open_24h);
-      const change    = open > 0 ? Number((((price - open) / open) * 100).toFixed(2)) : 0;
+      const price  = parseFloat(data.price);
+      const open   = parseFloat(data.open_24h);
+      const change = open > 0 ? Number((((price - open) / open) * 100).toFixed(2)) : 0;
+      const meta   = coinMetadata[symbol] || { rank: 9999, name: symbol, marketCap: 0, geckoId: '' };
       const dominance = totalMarketCap > 0
-        ? Number(((coinMetadata[symbol].marketCap / totalMarketCap) * 100).toFixed(2))
+        ? Number(((meta.marketCap / totalMarketCap) * 100).toFixed(2))
         : 0;
 
       prices[symbol] = {
-        rank:      coinMetadata[symbol].rank,
+        rank:      meta.rank,
         symbol,
-        name:      coinMetadata[symbol].name,
-        marketCap: coinMetadata[symbol].marketCap,
+        name:      meta.name || symbol,
+        marketCap: meta.marketCap || 0,
         dominance,
         high24h:   coinStats[symbol]?.high24h   || parseFloat(data.high_24h) || 0,
         low24h:    coinStats[symbol]?.low24h    || parseFloat(data.low_24h)  || 0,
