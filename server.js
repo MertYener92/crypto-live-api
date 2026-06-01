@@ -41,48 +41,55 @@ async function loadCoinGeckoMetadata(coinbaseSymbols) {
   const symbolSet = new Set(coinbaseSymbols);
   let matched = 0;
 
-  // CoinGecko top 500'ü 4 sayfada çek (125 x 4)
   for (let page = 1; page <= 4; page++) {
-    try {
-      const response = await axios.get(
-        'https://api.coingecko.com/api/v3/coins/markets',
-        {
-          params: {
-            vs_currency: 'usd',
-            order: 'market_cap_desc',
-            per_page: 125,
-            page,
-            sparkline: false,
-          },
-          timeout: 10000,
-        }
-      );
+    let success = false;
+    for (let attempt = 1; attempt <= 5; attempt++) {
+      try {
+        const response = await axios.get(
+          'https://api.coingecko.com/api/v3/coins/markets',
+          {
+            params: {
+              vs_currency: 'usd',
+              order: 'market_cap_desc',
+              per_page: 125,
+              page,
+              sparkline: false,
+            },
+            timeout: 10000,
+          }
+        );
 
-      response.data.forEach((coin) => {
-        const symbol = coin.symbol.toUpperCase();
-        if (symbolSet.has(symbol) && !coinMetadata[symbol]) {
-          coinMetadata[symbol] = {
-            rank: coin.market_cap_rank || 9999,
-            symbol,
-            name: coin.name,
-            marketCap: Number(coin.market_cap || 0),
-            logo: coin.image || '',
-            geckoId: coin.id,
-          };
-          matched++;
-        }
-      });
+        response.data.forEach((coin) => {
+          const symbol = coin.symbol.toUpperCase();
+          if (symbolSet.has(symbol) && !coinMetadata[symbol]) {
+            coinMetadata[symbol] = {
+              rank: coin.market_cap_rank || 9999,
+              symbol,
+              name: coin.name,
+              marketCap: Number(coin.market_cap || 0),
+              logo: coin.image || '',
+              geckoId: coin.id,
+            };
+            matched++;
+          }
+        });
 
-      // Rate limit için sayfalar arası 2sn bekle
-      if (page < 4) await new Promise((r) => setTimeout(r, 2000));
-    } catch (e) {
-      console.log(`CoinGecko sayfa ${page} hatası:`, e.message);
+        console.log(`CoinGecko sayfa ${page} yüklendi`);
+        success = true;
+        break;
+      } catch (e) {
+        const wait = attempt * 30000; // 30sn, 60sn, 90sn...
+        console.log(`CoinGecko sayfa ${page} hata (deneme ${attempt}), ${wait/1000}sn bekleniyor...`);
+        await new Promise((r) => setTimeout(r, wait));
+      }
     }
+    if (!success) console.log(`CoinGecko sayfa ${page} atlandı`);
+    // Sayfalar arası 15sn bekle
+    if (page < 4) await new Promise((r) => setTimeout(r, 15000));
   }
 
   console.log(`CoinGecko'dan ${matched} coin eşleştirildi`);
 
-  // Eşleşemeyen coinler için basit metadata oluştur
   coinbaseSymbols.forEach((symbol) => {
     if (!coinMetadata[symbol]) {
       coinMetadata[symbol] = {
@@ -96,7 +103,6 @@ async function loadCoinGeckoMetadata(coinbaseSymbols) {
     }
   });
 
-  // Sabit logolar (hız için)
   const staticLogos = {
     'BTC':  'https://coin-images.coingecko.com/coins/images/1/large/bitcoin.png',
     'ETH':  'https://coin-images.coingecko.com/coins/images/279/large/ethereum.png',
@@ -131,7 +137,8 @@ async function initialize() {
     const coinbaseSymbols = await loadCoinbaseSymbols();
     orderedSymbols = coinbaseSymbols;
 
-    // 2. CoinGecko metadata eşleştir
+    // 2. CoinGecko metadata — 10sn bekle sonra başla (rate limit önlemi)
+    await new Promise((r) => setTimeout(r, 10000));
     await loadCoinGeckoMetadata(coinbaseSymbols);
 
     // 3. Sırala: CoinGecko rank'e göre (rank'i olmayanlar sona)
