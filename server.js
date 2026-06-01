@@ -207,7 +207,8 @@ async function loadCoinStats() {
 // Sparkline
 // ─────────────────────────────────────────────────────────────────────────────
 async function loadSparklines() {
-  const promises = orderedSymbols.map(async (symbol) => {
+  let loaded = 0;
+  for (const symbol of orderedSymbols) {
     try {
       const end   = new Date();
       const start = new Date(end.getTime() - 24 * 60 * 60 * 1000);
@@ -220,15 +221,13 @@ async function loadSparklines() {
       );
       if (response.data && response.data.length > 0) {
         sparklineCache[symbol] = response.data.map((c) => c[4]).reverse().slice(-24);
-        // prices varsa guncelle, yoksa cache'de beklesin
-        if (prices[symbol]) {
-          prices[symbol].sparkline = sparklineCache[symbol];
-        }
+        loaded++;
       }
+      // Her istekten sonra 100ms bekle
+      await new Promise((r) => setTimeout(r, 100));
     } catch (_) {}
-  });
-  await Promise.allSettled(promises);
-  console.log('Sparklines yuklendi');
+  }
+  console.log(`Sparklines yuklendi: ${loaded}/${orderedSymbols.length}`);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
