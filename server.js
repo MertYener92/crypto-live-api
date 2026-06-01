@@ -8,6 +8,9 @@ app.use(cors());
 
 const PORT = process.env.PORT || 10000;
 
+const SUPABASE_URL = 'https://xzfrrskovooqiyiqqidy.supabase.co';
+const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inh6ZnJyc2tvdm9vcWl5aXFxaWR5Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3ODE2MTU3MCwiZXhwIjoyMDkzNzM3NTcwfQ.XI1AYOZpTM6i01JRGl_Dl9qyoMSOdWXeng50Z1UwzNE';
+
 let prices = {};
 let orderedSymbols = [];
 let coinMetadata = {};
@@ -17,30 +20,90 @@ let ws = null;
 const sparklineCache = {};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ADIM 1: Coinbase aktif USD coinleri
+// Supabase — metadata oku
 // ─────────────────────────────────────────────────────────────────────────────
-async function loadCoinbaseSymbols() {
-  const response = await axios.get(
-    'https://api.exchange.coinbase.com/products',
-    { timeout: 10000 }
-  );
-  const symbols = response.data
-    .filter((p) => p.quote_currency === 'USD' && p.status === 'online')
-    .map((p) => p.base_currency.toUpperCase());
-  console.log(`Coinbase: ${symbols.length} aktif USD coini`);
-  return symbols;
+async function loadMetadataFromSupabase() {
+  try {
+    const response = await axios.get(
+      `${SUPABASE_URL}/rest/v1/coin_metadata?select=*&limit=2000`,
+      {
+        headers: {
+          apikey: SUPABASE_KEY,
+          Authorization: `Bearer ${SUPABASE_KEY}`,
+        },
+        timeout: 10000,
+      }
+    );
+
+    if (response.data && response.data.length > 0) {
+      response.data.forEach((row) => {
+        coinMetadata[row.symbol] = {
+          rank: row.rank || 9999,
+          symbol: row.symbol,
+          name: row.name || row.symbol,
+          marketCap: Number(row.market_cap || 0),
+          logo: row.logo_url || '',
+          geckoId: row.gecko_id || '',
+        };
+      });
+      console.log(`Supabase'den ${response.data.length} coin metadata yuklendi`);
+      return true;
+    }
+    return false;
+  } catch (e) {
+    console.log('Supabase okuma hatasi:', e.message);
+    return false;
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ADIM 2: CoinGecko metadata (logo, rank, marketcap)
+// Supabase — metadata kaydet (upsert)
 // ─────────────────────────────────────────────────────────────────────────────
-async function loadCoinGeckoMetadata(symbols) {
+async function saveMetadataToSupabase(data) {
+  try {
+    const rows = data.map((coin) => ({
+      symbol: coin.symbol,
+      name: coin.name,
+      rank: coin.rank || 9999,
+      market_cap: coin.marketCap || 0,
+      logo_url: coin.logo || '',
+      gecko_id: coin.geckoId || '',
+      updated_at: new Date().toISOString(),
+    }));
+
+    // 500'er batch ile kaydet
+    for (let i = 0; i < rows.length; i += 500) {
+      const batch = rows.slice(i, i + 500);
+      await axios.post(
+        `${SUPABASE_URL}/rest/v1/coin_metadata`,
+        batch,
+        {
+          headers: {
+            apikey: SUPABASE_KEY,
+            Authorization: `Bearer ${SUPABASE_KEY}`,
+            'Content-Type': 'application/json',
+            Prefer: 'resolution=merge-duplicates',
+          },
+          timeout: 15000,
+        }
+      );
+    }
+    console.log(`${rows.length} coin metadata Supabase'e kaydedildi`);
+  } catch (e) {
+    console.log('Supabase kayit hatasi:', e.message);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CoinGecko — metadata cek ve Supabase'e kaydet
+// ─────────────────────────────────────────────────────────────────────────────
+async function fetchAndSaveCoinGeckoMetadata(symbols) {
   const symbolSet = new Set(symbols);
-  let matched = 0;
+  const collected = [];
 
   for (let page = 1; page <= 4; page++) {
     let success = false;
-    for (let attempt = 1; attempt <= 5; attempt++) {
+    for (let attempt = 1; attempt <= 3; attempt++) {
       try {
         const response = await axios.get(
           'https://api.coingecko.com/api/v3/coins/markets',
@@ -55,77 +118,69 @@ async function loadCoinGeckoMetadata(symbols) {
             timeout: 10000,
           }
         );
+
         response.data.forEach((coin) => {
           const symbol = coin.symbol.toUpperCase();
-          if (symbolSet.has(symbol) && !coinMetadata[symbol]) {
-            coinMetadata[symbol] = {
-              rank: coin.market_cap_rank || 9999,
+          if (symbolSet.has(symbol)) {
+            collected.push({
               symbol,
               name: coin.name,
+              rank: coin.market_cap_rank || 9999,
               marketCap: Number(coin.market_cap || 0),
               logo: coin.image || '',
               geckoId: coin.id,
-            };
-            matched++;
+            });
           }
         });
-        console.log(`CoinGecko sayfa ${page} yuklendi`);
+
+        console.log(`CoinGecko sayfa ${page} yuklendi (${collected.length} coin)`);
         success = true;
         break;
       } catch (e) {
-        const wait = attempt * 60000; // 60sn, 120sn, 180sn...
-        console.log(`CoinGecko sayfa ${page} hata (deneme ${attempt}), ${wait / 1000}sn bekleniyor...`);
+        const wait = attempt * 60000;
+        console.log(`CoinGecko sayfa ${page} hata, ${wait / 1000}sn bekleniyor...`);
         await new Promise((r) => setTimeout(r, wait));
       }
     }
     if (!success) console.log(`CoinGecko sayfa ${page} atlandi`);
-    if (page < 4) await new Promise((r) => setTimeout(r, 30000)); // 30sn aralik
+    if (page < 4) await new Promise((r) => setTimeout(r, 30000));
   }
 
-  console.log(`CoinGecko: ${matched} coin eslesti`);
+  if (collected.length > 0) {
+    // Supabase'e kaydet
+    await saveMetadataToSupabase(collected);
 
-  // Eslesmeyenler icin basit metadata
-  symbols.forEach((symbol) => {
-    if (!coinMetadata[symbol]) {
-      coinMetadata[symbol] = {
-        rank: 9999,
-        symbol,
-        name: symbol,
-        marketCap: 0,
-        logo: '',
-        geckoId: '',
-      };
-    }
-  });
+    // Memory'i guncelle
+    collected.forEach((coin) => {
+      coinMetadata[coin.symbol] = coin;
+    });
 
-  // Sabit logolar
-  const staticLogos = {
-    BTC:  'https://coin-images.coingecko.com/coins/images/1/large/bitcoin.png',
-    ETH:  'https://coin-images.coingecko.com/coins/images/279/large/ethereum.png',
-    USDT: 'https://coin-images.coingecko.com/coins/images/325/large/Tether.png',
-    BNB:  'https://coin-images.coingecko.com/coins/images/825/large/bnb-icon2_2x.png',
-    SOL:  'https://coin-images.coingecko.com/coins/images/4128/large/solana.png',
-    XRP:  'https://coin-images.coingecko.com/coins/images/44/large/xrp-symbol-white-128.png',
-    USDC: 'https://coin-images.coingecko.com/coins/images/6319/large/usdc.png',
-    DOGE: 'https://coin-images.coingecko.com/coins/images/5/large/dogecoin.png',
-    ADA:  'https://coin-images.coingecko.com/coins/images/975/large/cardano.png',
-    AVAX: 'https://coin-images.coingecko.com/coins/images/12559/large/Avalanche_Circle_RedWhite_Trans.png',
-    LINK: 'https://coin-images.coingecko.com/coins/images/877/large/chainlink-new-logo.png',
-    DOT:  'https://coin-images.coingecko.com/coins/images/12171/large/polkadot.png',
-    LTC:  'https://coin-images.coingecko.com/coins/images/2/large/litecoin.png',
-    UNI:  'https://coin-images.coingecko.com/coins/images/12504/large/uni.jpg',
-    ATOM: 'https://coin-images.coingecko.com/coins/images/1481/large/cosmos_hub.png',
-    XLM:  'https://coin-images.coingecko.com/coins/images/100/large/Stellar_symbol_black_RGB.png',
-    BCH:  'https://coin-images.coingecko.com/coins/images/780/large/bitcoin-cash-circle.png',
-    ETC:  'https://coin-images.coingecko.com/coins/images/453/large/ethereum-classic-logo.png',
-  };
-  Object.entries(staticLogos).forEach(([symbol, url]) => {
-    if (coinMetadata[symbol]) coinMetadata[symbol].logo = url;
-  });
+    // Rank'e gore sirala
+    orderedSymbols.sort((a, b) => {
+      return (coinMetadata[a]?.rank || 9999) - (coinMetadata[b]?.rank || 9999);
+    });
+
+    console.log(`Toplam ${collected.length} coin metadata guncellendi`);
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Coinbase 24s stats (high, low, volume)
+// Coinbase aktif USD coinleri
+// ─────────────────────────────────────────────────────────────────────────────
+async function loadCoinbaseSymbols() {
+  const response = await axios.get(
+    'https://api.exchange.coinbase.com/products',
+    { timeout: 10000 }
+  );
+  const symbols = response.data
+    .filter((p) => p.quote_currency === 'USD' && p.status === 'online')
+    .map((p) => p.base_currency.toUpperCase());
+  console.log(`Coinbase: ${symbols.length} aktif USD coini`);
+  return symbols;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Coinbase 24s stats
 // ─────────────────────────────────────────────────────────────────────────────
 async function loadCoinStats() {
   for (const symbol of orderedSymbols) {
@@ -145,7 +200,7 @@ async function loadCoinStats() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Sparkline — Coinbase candles (1 saatlik, 24 mum)
+// Sparkline
 // ─────────────────────────────────────────────────────────────────────────────
 async function loadSparklines() {
   const promises = orderedSymbols.map(async (symbol) => {
@@ -170,7 +225,7 @@ async function loadSparklines() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// CoinLore — Global market cap
+// Global market cap
 // ─────────────────────────────────────────────────────────────────────────────
 async function loadGlobalStats() {
   try {
@@ -183,7 +238,7 @@ async function loadGlobalStats() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Coinbase WebSocket — canlı fiyatlar
+// Coinbase WebSocket
 // ─────────────────────────────────────────────────────────────────────────────
 function startWebSocket() {
   if (ws) ws.close();
@@ -204,11 +259,11 @@ function startWebSocket() {
       const data = JSON.parse(msg.toString());
       if (data.type !== 'ticker') return;
 
-      const symbol = data.product_id.replace('-USD', '');
-      const price  = parseFloat(data.price);
-      const open   = parseFloat(data.open_24h);
-      const change = open > 0 ? Number((((price - open) / open) * 100).toFixed(2)) : 0;
-      const meta   = coinMetadata[symbol] || { rank: 9999, name: symbol, marketCap: 0, geckoId: '' };
+      const symbol  = data.product_id.replace('-USD', '');
+      const price   = parseFloat(data.price);
+      const open    = parseFloat(data.open_24h);
+      const change  = open > 0 ? Number((((price - open) / open) * 100).toFixed(2)) : 0;
+      const meta    = coinMetadata[symbol] || { rank: 9999, name: symbol, marketCap: 0 };
       const dominance = totalMarketCap > 0
         ? Number(((meta.marketCap / totalMarketCap) * 100).toFixed(2))
         : 0;
@@ -240,34 +295,7 @@ function startWebSocket() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Metadata yenile (6 saatte bir)
-// ─────────────────────────────────────────────────────────────────────────────
-async function refreshMetadata() {
-  for (let page = 1; page <= 4; page++) {
-    try {
-      const response = await axios.get(
-        'https://api.coingecko.com/api/v3/coins/markets',
-        {
-          params: { vs_currency: 'usd', order: 'market_cap_desc', per_page: 125, page, sparkline: false },
-          timeout: 10000,
-        }
-      );
-      response.data.forEach((coin) => {
-        const symbol = coin.symbol.toUpperCase();
-        if (coinMetadata[symbol]) {
-          coinMetadata[symbol].marketCap = Number(coin.market_cap || 0);
-          coinMetadata[symbol].rank = coin.market_cap_rank || coinMetadata[symbol].rank;
-          if (coin.image) coinMetadata[symbol].logo = coin.image;
-        }
-      });
-    } catch (_) {}
-    if (page < 4) await new Promise((r) => setTimeout(r, 15000));
-  }
-  console.log('Metadata yenilendi');
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Ana başlatma
+// Ana baslama
 // ─────────────────────────────────────────────────────────────────────────────
 async function initialize() {
   try {
@@ -275,22 +303,18 @@ async function initialize() {
     const symbols = await loadCoinbaseSymbols();
     orderedSymbols = symbols;
 
-    // 2. Global stats + WebSocket hemen başlat
+    // 2. Supabase'den onceki metadata'yi yukle
+    const hasCache = await loadMetadataFromSupabase();
+
+    // 3. Rank'e gore sirala
+    orderedSymbols.sort((a, b) => {
+      return (coinMetadata[a]?.rank || 9999) - (coinMetadata[b]?.rank || 9999);
+    });
+
+    // 4. Global stats + WebSocket + stats basalt
     await loadGlobalStats();
     startWebSocket();
-
-    // 3. Stats arka planda yükle
     loadCoinStats();
-
-    // 4. CoinGecko metadata — 60sn bekle (rate limit)
-    setTimeout(async () => {
-      await loadCoinGeckoMetadata(symbols);
-      // Rank'e göre sırala
-      orderedSymbols.sort((a, b) => {
-        return (coinMetadata[a]?.rank || 9999) - (coinMetadata[b]?.rank || 9999);
-      });
-      console.log(`Toplam ${orderedSymbols.length} coin hazir`);
-    }, 15000);
 
     // 5. Sparkline 60sn sonra
     setTimeout(() => {
@@ -298,10 +322,18 @@ async function initialize() {
       setInterval(() => loadSparklines(), 1800000);
     }, 60000);
 
-    // 6. Periyodik yenilemeler
-    setInterval(() => loadCoinStats(),    300000);
-    setInterval(() => loadGlobalStats(),  300000);
-    setInterval(() => refreshMetadata(), 21600000);
+    // 6. CoinGecko'dan taze metadata cek ve Supabase'e kaydet
+    // Cache varsa 5dk bekle, yoksa hemen basla
+    const geckoDelay = hasCache ? 300000 : 60000;
+    setTimeout(() => {
+      fetchAndSaveCoinGeckoMetadata(symbols);
+      // 6 saatte bir yenile
+      setInterval(() => fetchAndSaveCoinGeckoMetadata(symbols), 21600000);
+    }, geckoDelay);
+
+    // 7. Periyodik yenilemeler
+    setInterval(() => loadCoinStats(),   300000);
+    setInterval(() => loadGlobalStats(), 300000);
 
     console.log(`Sunucu hazir, ${orderedSymbols.length} coin yuklendi`);
   } catch (e) {
@@ -350,7 +382,7 @@ app.get('/prices', (req, res) => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// GET /chart/:symbol?period=1D|1M|3M|6M|1Y|5Y
+// GET /chart/:symbol
 // ─────────────────────────────────────────────────────────────────────────────
 function getChartConfig(period) {
   switch (period) {
@@ -448,7 +480,7 @@ app.get('/fng', async (req, res) => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Başlat
+// Basalt
 // ─────────────────────────────────────────────────────────────────────────────
 initialize();
 
