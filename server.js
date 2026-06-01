@@ -73,13 +73,13 @@ async function loadCoinGeckoMetadata(symbols) {
         success = true;
         break;
       } catch (e) {
-        const wait = attempt * 30000;
+        const wait = attempt * 60000; // 60sn, 120sn, 180sn...
         console.log(`CoinGecko sayfa ${page} hata (deneme ${attempt}), ${wait / 1000}sn bekleniyor...`);
         await new Promise((r) => setTimeout(r, wait));
       }
     }
     if (!success) console.log(`CoinGecko sayfa ${page} atlandi`);
-    if (page < 4) await new Promise((r) => setTimeout(r, 15000));
+    if (page < 4) await new Promise((r) => setTimeout(r, 30000)); // 30sn aralik
   }
 
   console.log(`CoinGecko: ${matched} coin eslesti`);
@@ -282,7 +282,7 @@ async function initialize() {
     // 3. Stats arka planda yükle
     loadCoinStats();
 
-    // 4. CoinGecko metadata — 15sn bekle (rate limit)
+    // 4. CoinGecko metadata — 60sn bekle (rate limit)
     setTimeout(async () => {
       await loadCoinGeckoMetadata(symbols);
       // Rank'e göre sırala
