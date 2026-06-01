@@ -16,44 +16,54 @@ let totalMarketCap = 0;
 let ws = null;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// CoinGecko — Top 100 coin + logolar + market cap
+// CoinGecko — Top 250 coin (2 sayfa x 125)
 // ─────────────────────────────────────────────────────────────────────────────
-async function loadTopCoins() {
-  try {
-    // 429 durumunda 60 saniye bekle ve tekrar dene
-    let response;
-    for (let attempt = 1; attempt <= 5; attempt++) {
-      try {
-        response = await axios.get(
-          'https://api.coingecko.com/api/v3/coins/markets',
-          {
-            params: {
-              vs_currency: 'usd',
-              order: 'market_cap_desc',
-              per_page: 100,
-              page: 1,
-              sparkline: false,
-            },
-            timeout: 10000,
-          }
-        );
-        break; // Başarılıysa döngüden çık
-      } catch (err) {
-        if (err.response && err.response.status === 429) {
-          const wait = attempt * 60000; // 1dk, 2dk, 3dk...
-          console.log(`CoinGecko rate limit, ${wait/1000}s sonra tekrar deneniyor...`);
-          await new Promise((r) => setTimeout(r, wait));
-        } else {
-          throw err;
+async function fetchCoinGeckoPage(page, perPage) {
+  for (let attempt = 1; attempt <= 5; attempt++) {
+    try {
+      const response = await axios.get(
+        'https://api.coingecko.com/api/v3/coins/markets',
+        {
+          params: {
+            vs_currency: 'usd',
+            order: 'market_cap_desc',
+            per_page: perPage,
+            page,
+            sparkline: false,
+          },
+          timeout: 10000,
         }
+      );
+      return response.data;
+    } catch (err) {
+      if (err.response && err.response.status === 429) {
+        const wait = attempt * 60000;
+        console.log(`CoinGecko rate limit, ${wait / 1000}s sonra tekrar deneniyor...`);
+        await new Promise((r) => setTimeout(r, wait));
+      } else {
+        throw err;
       }
     }
-    if (!response) throw new Error('CoinGecko max retry aşıldı');
+  }
+  throw new Error('CoinGecko max retry aşıldı');
+}
+
+async function loadTopCoins() {
+  try {
+    // Sayfa 1: 1-125, Sayfa 2: 126-250
+    const [page1, page2] = await Promise.all([
+      fetchCoinGeckoPage(1, 125),
+      fetchCoinGeckoPage(2, 125),
+    ]);
+
+    const allCoins = [...page1, ...page2];
 
     orderedSymbols = [];
 
-    response.data.forEach((coin, index) => {
+    allCoins.forEach((coin, index) => {
       const symbol = coin.symbol.toUpperCase();
+      // Aynı sembol iki kez gelirse ilkini koru
+      if (orderedSymbols.includes(symbol)) return;
       orderedSymbols.push(symbol);
       coinMetadata[symbol] = {
         rank: index + 1,
@@ -65,7 +75,7 @@ async function loadTopCoins() {
       };
     });
 
-    // Önemli coinler için sabit CoinGecko URL'leri — hızlı yükleme
+    // Önemli coinler için sabit logolar
     const staticLogos = {
       'BTC':  'https://coin-images.coingecko.com/coins/images/1/large/bitcoin.png',
       'ETH':  'https://coin-images.coingecko.com/coins/images/279/large/ethereum.png',
@@ -80,7 +90,6 @@ async function loadTopCoins() {
       'AVAX': 'https://coin-images.coingecko.com/coins/images/12559/large/Avalanche_Circle_RedWhite_Trans.png',
       'LINK': 'https://coin-images.coingecko.com/coins/images/877/large/chainlink-new-logo.png',
       'DOT':  'https://coin-images.coingecko.com/coins/images/12171/large/polkadot.png',
-      'MATIC':'https://coin-images.coingecko.com/coins/images/4713/large/matic-token-icon.png',
       'LTC':  'https://coin-images.coingecko.com/coins/images/2/large/litecoin.png',
       'UNI':  'https://coin-images.coingecko.com/coins/images/12504/large/uni.jpg',
       'ATOM': 'https://coin-images.coingecko.com/coins/images/1481/large/cosmos_hub.png',
@@ -89,27 +98,21 @@ async function loadTopCoins() {
       'ETC':  'https://coin-images.coingecko.com/coins/images/453/large/ethereum-classic-logo.png',
     };
     Object.entries(staticLogos).forEach(([symbol, url]) => {
-      if (coinMetadata[symbol]) {
-        coinMetadata[symbol].logo = url;
-      }
+      if (coinMetadata[symbol]) coinMetadata[symbol].logo = url;
     });
 
-    console.log('Top 100 coins loaded from CoinGecko');
+    console.log(`Top ${orderedSymbols.length} coins loaded from CoinGecko`);
 
     startWebSocket();
     await loadCoinStats();
     await loadGlobalStats();
 
-    // Her 5 dakikada stats yenile
     setInterval(() => loadCoinStats(), 300000);
     setInterval(() => loadGlobalStats(), 300000);
-    // Her 6 saatte coin listesini yenile (logo + marketcap güncellenir)
     setInterval(() => refreshCoinList(), 21600000);
-    // Sparkline 60 saniye sonra yukle
     setTimeout(() => { loadSparklines(); setInterval(() => loadSparklines(), 1800000); }, 60000);
   } catch (e) {
     console.log('CoinGecko Error:', e.message);
-    // CoinGecko hata verirse tekrar dene
     setTimeout(() => loadTopCoins(), 10000);
   }
 }
@@ -119,21 +122,13 @@ async function loadTopCoins() {
 // ─────────────────────────────────────────────────────────────────────────────
 async function refreshCoinList() {
   try {
-    const response = await axios.get(
-      'https://api.coingecko.com/api/v3/coins/markets',
-      {
-        params: {
-          vs_currency: 'usd',
-          order: 'market_cap_desc',
-          per_page: 100,
-          page: 1,
-          sparkline: false,
-        },
-        timeout: 10000,
-      }
-    );
+    const [page1, page2] = await Promise.all([
+      fetchCoinGeckoPage(1, 125),
+      fetchCoinGeckoPage(2, 125),
+    ]);
+    const allCoins = [...page1, ...page2];
 
-    response.data.forEach((coin, index) => {
+    allCoins.forEach((coin, index) => {
       const symbol = coin.symbol.toUpperCase();
       if (coinMetadata[symbol]) {
         coinMetadata[symbol].marketCap = Number(coin.market_cap || 0);
@@ -149,7 +144,7 @@ async function refreshCoinList() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Coinbase REST — 24s istatistikler (high / low / volume)
+// Coinbase REST — 24s istatistikler
 // ─────────────────────────────────────────────────────────────────────────────
 async function loadCoinStats() {
   try {
@@ -163,9 +158,7 @@ async function loadCoinStats() {
           low24h: Number(response.data.low),
           volume24h: Number(response.data.volume),
         };
-      } catch (_) {
-        // Coinbase'de listelenmeyen coin — geç
-      }
+      } catch (_) {}
     }
     console.log('Coin stats loaded');
   } catch (e) {
@@ -173,7 +166,9 @@ async function loadCoinStats() {
   }
 }
 
-// Sparkline — CoinGecko'dan 7 gunluk sparkline (tek istek)
+// ─────────────────────────────────────────────────────────────────────────────
+// Sparkline
+// ─────────────────────────────────────────────────────────────────────────────
 const sparklineCache = {};
 
 async function loadSparklines() {
@@ -198,7 +193,6 @@ async function loadSparklines() {
       }
     } catch (_) {}
   });
-  // Paralel calistir - hepsini ayni anda iste
   await Promise.allSettled(promises);
   console.log('Sparklines loaded from Coinbase');
 }
@@ -278,14 +272,13 @@ function startWebSocket() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// GET /logo/:symbol — CoinGecko logosunu proxy'leyerek döndür
+// GET /logo/:symbol
 // ─────────────────────────────────────────────────────────────────────────────
 const logoCache = {};
 
 app.get('/logo/:symbol', async (req, res) => {
   const symbol = req.params.symbol.toUpperCase();
   try {
-    // Cache'de varsa direkt döndür
     if (logoCache[symbol]) {
       res.set('Content-Type', logoCache[symbol].contentType);
       res.set('Cache-Control', 'public, max-age=86400');
@@ -293,9 +286,7 @@ app.get('/logo/:symbol', async (req, res) => {
     }
 
     const logoUrl = coinMetadata[symbol]?.logo;
-    if (!logoUrl) {
-      return res.status(404).send('Logo not found');
-    }
+    if (!logoUrl) return res.status(404).send('Logo not found');
 
     const response = await axios.get(logoUrl, {
       responseType: 'arraybuffer',
@@ -303,10 +294,7 @@ app.get('/logo/:symbol', async (req, res) => {
     });
 
     const contentType = response.headers['content-type'] || 'image/png';
-    logoCache[symbol] = {
-      data: response.data,
-      contentType,
-    };
+    logoCache[symbol] = { data: response.data, contentType };
 
     res.set('Content-Type', contentType);
     res.set('Cache-Control', 'public, max-age=86400');
@@ -329,7 +317,7 @@ app.get('/prices', (req, res) => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Chart periyot konfigürasyonu
+// Chart
 // ─────────────────────────────────────────────────────────────────────────────
 function getChartConfig(period) {
   switch (period) {
@@ -376,9 +364,6 @@ async function fetchCandles(symbol, startMs, endMs, granularity) {
   return allCandles;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// GET /chart/:symbol?period=1D|1M|3M|6M|1Y|5Y
-// ─────────────────────────────────────────────────────────────────────────────
 app.get('/chart/:symbol', async (req, res) => {
   try {
     const symbol = req.params.symbol.toUpperCase();
@@ -406,7 +391,7 @@ app.get('/chart/:symbol', async (req, res) => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// GET /fng — Korku & Açgözlülük (10 dakika cache)
+// GET /fng
 // ─────────────────────────────────────────────────────────────────────────────
 let fngCache     = null;
 let fngLastFetch = 0;
