@@ -8,8 +8,8 @@ app.use(cors());
 
 const PORT = process.env.PORT || 10000;
 
-const SUPABASE_URL = 'https://edmvkecnitzueryzylpo.supabase.co';
-const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVkbXZrZWNuaXR6dWVyeXp5bHBvIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3OTYwNzg5OSwiZXhwIjoyMDk1MTgzODk5fQ.HQpDHbG1N-oEyvDOJFXH5yO3tpG9s-9_meeqLOkmM3k';
+const SUPABASE_URL = 'https://xzfrrskovooqiyiqqidy.supabase.co';
+const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inh6ZnJyc2tvdm9vcWl5aXFxaWR5Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3ODE2MTU3MCwiZXhwIjoyMDkzNzM3NTcwfQ.XI1AYOZpTM6i01JRGl_Dl9qyoMSOdWXeng50Z1UwzNE';
 
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || '';
 
@@ -557,6 +557,113 @@ app.get('/chart/:symbol', async (req, res) => {
 
 let fngCache = null;
 let fngLastFetch = 0;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /prefetch-descriptions
+// gecko_id dolu ama description_tr boş olan tüm coinleri çevirir
+// ─────────────────────────────────────────────────────────────────────────────
+let prefetchRunning = false;
+
+app.get('/prefetch-descriptions', async (req, res) => {
+  if (prefetchRunning) {
+    return res.json({ status: 'already_running', message: 'Prefetch zaten çalışıyor' });
+  }
+
+  // Supabase'den gecko_id dolu ama description_tr boş coinleri çek
+  let coins = [];
+  try {
+    const response = await axios.get(
+      `${SUPABASE_URL}/rest/v1/assets?select=symbol,name,gecko_id&gecko_id=not.is.null&description_tr=is.null`,
+      {
+        headers: {
+          apikey: SUPABASE_KEY,
+          Authorization: `Bearer ${SUPABASE_KEY}`,
+        },
+        timeout: 10000,
+      }
+    );
+    coins = response.data || [];
+  } catch (e) {
+    return res.status(500).json({ status: 'error', message: e.message });
+  }
+
+  res.json({
+    status: 'started',
+    total: coins.length,
+    message: `${coins.length} coin arka planda çevriliyor, her biri ~4sn sürer`,
+  });
+
+  // Arka planda çalıştır
+  prefetchRunning = true;
+  (async () => {
+    let success = 0;
+    let failed = 0;
+
+    for (const coin of coins) {
+      try {
+        // CoinGecko'dan çek
+        const geckoResponse = await axios.get(
+          `https://api.coingecko.com/api/v3/coins/${coin.gecko_id}`,
+          {
+            params: {
+              localization: false,
+              tickers: false,
+              market_data: false,
+              community_data: false,
+              developer_data: false,
+            },
+            timeout: 10000,
+          }
+        );
+
+        const englishDescription = geckoResponse.data?.description?.en || null;
+        if (!englishDescription || englishDescription.length < 20) {
+          failed++;
+          await new Promise((r) => setTimeout(r, 3000));
+          continue;
+        }
+
+        // Claude ile çevir
+        const translatedText = await translateWithClaude(englishDescription, coin.name);
+        if (!translatedText) {
+          failed++;
+          await new Promise((r) => setTimeout(r, 3000));
+          continue;
+        }
+
+        // Supabase'e kaydet
+        await axios.patch(
+          `${SUPABASE_URL}/rest/v1/assets?symbol=eq.${coin.symbol}`,
+          { description_tr: translatedText },
+          {
+            headers: {
+              apikey: SUPABASE_KEY,
+              Authorization: `Bearer ${SUPABASE_KEY}`,
+              'Content-Type': 'application/json',
+              Prefer: 'return=minimal',
+            },
+            timeout: 5000,
+          }
+        );
+
+        success++;
+        console.log(`Prefetch: ${coin.symbol} çevrildi (${success}/${coins.length})`);
+
+        // Rate limit için 4sn bekle
+        await new Promise((r) => setTimeout(r, 4000));
+      } catch (e) {
+        console.log(`Prefetch: ${coin.symbol} hata - ${e.message}`);
+        failed++;
+        // 429 rate limit hatası ise daha uzun bekle
+        const waitTime = e.response?.status === 429 ? 60000 : 4000;
+        await new Promise((r) => setTimeout(r, waitTime));
+      }
+    }
+
+    prefetchRunning = false;
+    console.log(`Prefetch tamamlandı: ${success} başarılı, ${failed} başarısız`);
+  })();
+});
 
 app.get('/fng', async (req, res) => {
   try {
