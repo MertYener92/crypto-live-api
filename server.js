@@ -8,7 +8,7 @@ app.use(cors());
 
 const PORT = process.env.PORT || 10000;
 
-const SUPABASE_URL = 'https://xzfrrskovooqiyiqqidy.supabase.co';
+const SUPABASE_URL = 'https://edmvkecnitzueryzylpo.supabase.co';
 const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inh6ZnJyc2tvdm9vcWl5aXFxaWR5Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3ODE2MTU3MCwiZXhwIjoyMDkzNzM3NTcwfQ.XI1AYOZpTM6i01JRGl_Dl9qyoMSOdWXeng50Z1UwzNE';
 
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || '';
