@@ -29,7 +29,7 @@ async function loadMetadataFromSupabase() {
   try {
     console.log('Supabase assets yukleniyor...');
     const response = await axios.get(
-`${SUPABASE_URL}/rest/v1/assets?select=symbol,name,logo_url,gecko_id`,      {
+`${SUPABASE_URL}/rest/v1/assets?select=*`,      {
         headers: {
           apikey: SUPABASE_KEY,
           Authorization: `Bearer ${SUPABASE_KEY}`,
