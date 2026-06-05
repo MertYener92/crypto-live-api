@@ -11,6 +11,9 @@ const PORT = process.env.PORT || 10000;
 const SUPABASE_URL = 'https://xzfrrskovooqiyiqqidy.supabase.co';
 const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inh6ZnJyc2tvdm9vcWl5aXFxaWR5Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3ODE2MTU3MCwiZXhwIjoyMDkzNzM3NTcwfQ.XI1AYOZpTM6i01JRGl_Dl9qyoMSOdWXeng50Z1UwzNE';
 
+// Render dashboard > Environment > ANTHROPIC_API_KEY olarak ekle
+const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || '';
+
 let prices = {};
 let orderedSymbols = [];
 let coinMetadata = {};
@@ -20,13 +23,13 @@ let ws = null;
 const sparklineCache = {};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Supabase — metadata oku
+// Supabase — assets tablosundan metadata oku
 // ─────────────────────────────────────────────────────────────────────────────
 async function loadMetadataFromSupabase() {
   try {
-    console.log('Supabase metadata yukleniyor...');
+    console.log('Supabase assets yukleniyor...');
     const response = await axios.get(
-      `${SUPABASE_URL}/rest/v1/coin_metadata?select=*&limit=2000`,
+      `${SUPABASE_URL}/rest/v1/assets?select=symbol,name,logo_url,gecko_id&type=eq.crypto&is_active=eq.true&limit=2000`,
       {
         headers: {
           apikey: SUPABASE_KEY,
@@ -36,70 +39,63 @@ async function loadMetadataFromSupabase() {
       }
     );
 
-    console.log(`Supabase response status: ${response.status}, kayit sayisi: ${response.data?.length}`);
-
     if (response.data && response.data.length > 0) {
       response.data.forEach((row) => {
         coinMetadata[row.symbol] = {
-          rank: row.rank || 9999,
           symbol: row.symbol,
           name: row.name || row.symbol,
-          marketCap: Number(row.market_cap || 0),
           logo: row.logo_url || '',
           geckoId: row.gecko_id || '',
+          rank: 9999,
+          marketCap: 0,
         };
       });
-      console.log(`Supabase'den ${response.data.length} coin metadata yuklendi`);
+      console.log(`Supabase assets: ${response.data.length} coin yuklendi`);
       return true;
     }
-    console.log('Supabase bos dondu');
+    console.log('Supabase assets bos dondu');
     return false;
   } catch (e) {
-    console.log('Supabase okuma hatasi:', e.message, e.response?.status, e.response?.data);
+    console.log('Supabase okuma hatasi:', e.message);
     return false;
   }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Supabase — metadata kaydet (upsert)
+// Supabase — assets tablosunu guncelle (logo, gecko_id, rank)
 // ─────────────────────────────────────────────────────────────────────────────
 async function saveMetadataToSupabase(data) {
   try {
-    const rows = data.map((coin) => ({
-      symbol: coin.symbol,
-      name: coin.name,
-      rank: coin.rank || 9999,
-      market_cap: coin.marketCap || 0,
-      logo_url: coin.logo || '',
-      gecko_id: coin.geckoId || '',
-      updated_at: new Date().toISOString(),
-    }));
-
-    // 500'er batch ile kaydet
-    for (let i = 0; i < rows.length; i += 500) {
-      const batch = rows.slice(i, i + 500);
-      await axios.post(
-        `${SUPABASE_URL}/rest/v1/coin_metadata`,
-        batch,
-        {
-          headers: {
-            apikey: SUPABASE_KEY,
-            Authorization: `Bearer ${SUPABASE_KEY}`,
-            'Content-Type': 'application/json',
-            Prefer: 'resolution=merge-duplicates',
+    for (let i = 0; i < data.length; i += 100) {
+      const batch = data.slice(i, i + 100);
+      for (const coin of batch) {
+        await axios.patch(
+          `${SUPABASE_URL}/rest/v1/assets?symbol=eq.${coin.symbol}`,
+          {
+            logo_url: coin.logo || '',
+            gecko_id: coin.geckoId || '',
+            updated_at: new Date().toISOString(),
           },
-          timeout: 15000,
-        }
-      );
+          {
+            headers: {
+              apikey: SUPABASE_KEY,
+              Authorization: `Bearer ${SUPABASE_KEY}`,
+              'Content-Type': 'application/json',
+              Prefer: 'return=minimal',
+            },
+            timeout: 5000,
+          }
+        );
+      }
     }
-    console.log(`${rows.length} coin metadata Supabase'e kaydedildi`);
+    console.log(`${data.length} coin assets tablosunda guncellendi`);
   } catch (e) {
-    console.log('Supabase kayit hatasi:', e.message);
+    console.log('Supabase guncelleme hatasi:', e.message);
   }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// CoinGecko — metadata cek ve Supabase'e kaydet
+// CoinGecko — metadata cek ve assets tablosuna kaydet
 // ─────────────────────────────────────────────────────────────────────────────
 async function fetchAndSaveCoinGeckoMetadata(symbols) {
   const symbolSet = new Set(symbols);
@@ -151,15 +147,19 @@ async function fetchAndSaveCoinGeckoMetadata(symbols) {
   }
 
   if (collected.length > 0) {
-    // Supabase'e kaydet
     await saveMetadataToSupabase(collected);
 
-    // Memory'i guncelle
     collected.forEach((coin) => {
-      coinMetadata[coin.symbol] = coin;
+      if (coinMetadata[coin.symbol]) {
+        coinMetadata[coin.symbol].rank = coin.rank;
+        coinMetadata[coin.symbol].marketCap = coin.marketCap;
+        coinMetadata[coin.symbol].logo = coin.logo;
+        coinMetadata[coin.symbol].geckoId = coin.geckoId;
+      } else {
+        coinMetadata[coin.symbol] = coin;
+      }
     });
 
-    // Rank'e gore sirala
     orderedSymbols.sort((a, b) => {
       return (coinMetadata[a]?.rank || 9999) - (coinMetadata[b]?.rank || 9999);
     });
@@ -223,7 +223,6 @@ async function loadSparklines() {
         sparklineCache[symbol] = response.data.map((c) => c[4]).reverse().slice(-24);
         loaded++;
       }
-      // Her istekten sonra 100ms bekle
       await new Promise((r) => setTimeout(r, 100));
     } catch (_) {}
   }
@@ -265,11 +264,11 @@ function startWebSocket() {
       const data = JSON.parse(msg.toString());
       if (data.type !== 'ticker') return;
 
-      const symbol  = data.product_id.replace('-USD', '');
-      const price   = parseFloat(data.price);
-      const open    = parseFloat(data.open_24h);
-      const change  = open > 0 ? Number((((price - open) / open) * 100).toFixed(2)) : 0;
-      const meta    = coinMetadata[symbol] || { rank: 9999, name: symbol, marketCap: 0 };
+      const symbol    = data.product_id.replace('-USD', '');
+      const price     = parseFloat(data.price);
+      const open      = parseFloat(data.open_24h);
+      const change    = open > 0 ? Number((((price - open) / open) * 100).toFixed(2)) : 0;
+      const meta      = coinMetadata[symbol] || { rank: 9999, name: symbol, marketCap: 0 };
       const dominance = totalMarketCap > 0
         ? Number(((meta.marketCap / totalMarketCap) * 100).toFixed(2))
         : 0;
@@ -301,43 +300,173 @@ function startWebSocket() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Claude ile Türkçe çeviri
+// ─────────────────────────────────────────────────────────────────────────────
+async function translateWithClaude(englishText, coinName) {
+  if (!ANTHROPIC_API_KEY) {
+    console.log('ANTHROPIC_API_KEY eksik');
+    return null;
+  }
+
+  const cleanText = englishText.replace(/<[^>]*>/g, '').trim();
+  if (!cleanText || cleanText.length < 20) return null;
+
+  try {
+    const response = await axios.post(
+      'https://api.anthropic.com/v1/messages',
+      {
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 1024,
+        messages: [
+          {
+            role: 'user',
+            content: `Aşağıdaki kripto para açıklamasını Türkçe'ye çevir.
+Kurallar:
+- Teknik terimler (blockchain, token, smart contract, DeFi, staking vb.) Türkçe'ye çevrilmez
+- Coin/proje isimleri değiştirilmez
+- Sadece çeviriyi yaz, başka hiçbir şey ekleme
+- Doğal ve akıcı Türkçe kullan
+
+${coinName} açıklaması:
+${cleanText.slice(0, 1500)}`,
+          },
+        ],
+      },
+      {
+        headers: {
+          'x-api-key': ANTHROPIC_API_KEY,
+          'anthropic-version': '2023-06-01',
+          'Content-Type': 'application/json',
+        },
+        timeout: 30000,
+      }
+    );
+    return response.data.content[0]?.text?.trim() || null;
+  } catch (e) {
+    console.log('Claude çeviri hatası:', e.message);
+    return null;
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /coin-info/:symbol
+// Önce assets.description_tr'ye bakar, yoksa CoinGecko + Claude ile üretir
+// ─────────────────────────────────────────────────────────────────────────────
+app.get('/coin-info/:symbol', async (req, res) => {
+  const symbol = req.params.symbol.toUpperCase();
+
+  // 1. assets tablosunda description_tr var mı?
+  try {
+    const cached = await axios.get(
+      `${SUPABASE_URL}/rest/v1/assets?symbol=eq.${symbol}&select=description_tr,gecko_id,name`,
+      {
+        headers: {
+          apikey: SUPABASE_KEY,
+          Authorization: `Bearer ${SUPABASE_KEY}`,
+        },
+        timeout: 5000,
+      }
+    );
+
+    const row = cached.data?.[0];
+
+    if (row?.description_tr) {
+      return res.json({ symbol, description_tr: row.description_tr, source: 'cache' });
+    }
+
+    // 2. gecko_id yoksa eşleşme yok
+    const geckoId = row?.gecko_id || coinMetadata[symbol]?.geckoId;
+    if (!geckoId) {
+      return res.json({ symbol, description_tr: null, source: 'no_match' });
+    }
+
+    // 3. CoinGecko'dan İngilizce açıklama çek
+    let englishDescription = null;
+    try {
+      const geckoResponse = await axios.get(
+        `https://api.coingecko.com/api/v3/coins/${geckoId}`,
+        {
+          params: {
+            localization: false,
+            tickers: false,
+            market_data: false,
+            community_data: false,
+            developer_data: false,
+          },
+          timeout: 10000,
+        }
+      );
+      englishDescription = geckoResponse.data?.description?.en || null;
+    } catch (e) {
+      console.log(`CoinGecko ${symbol} hatası:`, e.message);
+      return res.status(503).json({ symbol, description_tr: null, source: 'gecko_error' });
+    }
+
+    if (!englishDescription || englishDescription.length < 20) {
+      return res.json({ symbol, description_tr: null, source: 'no_description' });
+    }
+
+    // 4. Claude ile Türkçe'ye çevir
+    const coinName = row?.name || coinMetadata[symbol]?.name || symbol;
+    const translatedText = await translateWithClaude(englishDescription, coinName);
+
+    if (!translatedText) {
+      return res.json({ symbol, description_tr: null, source: 'translation_failed' });
+    }
+
+    // 5. assets tablosuna description_tr olarak kaydet
+    await axios.patch(
+      `${SUPABASE_URL}/rest/v1/assets?symbol=eq.${symbol}`,
+      { description_tr: translatedText },
+      {
+        headers: {
+          apikey: SUPABASE_KEY,
+          Authorization: `Bearer ${SUPABASE_KEY}`,
+          'Content-Type': 'application/json',
+          Prefer: 'return=minimal',
+        },
+        timeout: 5000,
+      }
+    );
+
+    console.log(`${symbol} açıklaması çevrildi ve kaydedildi`);
+    res.json({ symbol, description_tr: translatedText, source: 'translated' });
+
+  } catch (e) {
+    console.log(`/coin-info/${symbol} hatası:`, e.message);
+    res.status(500).json({ symbol, description_tr: null, source: 'error' });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Ana baslama
 // ─────────────────────────────────────────────────────────────────────────────
 async function initialize() {
   try {
-    // 1. Coinbase sembollerini al
     const symbols = await loadCoinbaseSymbols();
     orderedSymbols = symbols;
 
-    // 2. Supabase'den onceki metadata'yi yukle
     const hasCache = await loadMetadataFromSupabase();
 
-    // 3. Rank'e gore sirala
     orderedSymbols.sort((a, b) => {
       return (coinMetadata[a]?.rank || 9999) - (coinMetadata[b]?.rank || 9999);
     });
 
-    // 4. Global stats + WebSocket + stats basalt
     await loadGlobalStats();
     startWebSocket();
     loadCoinStats();
 
-    // 5. Sparkline 2dk sonra yukle - prices dolmus olsun
     setTimeout(() => {
       loadSparklines();
       setInterval(() => loadSparklines(), 1800000);
     }, 120000);
 
-    // 6. CoinGecko'dan taze metadata cek ve Supabase'e kaydet
-    // Cache varsa 5dk bekle, yoksa hemen basla
     const geckoDelay = hasCache ? 300000 : 60000;
     setTimeout(() => {
       fetchAndSaveCoinGeckoMetadata(symbols);
-      // 6 saatte bir yenile
       setInterval(() => fetchAndSaveCoinGeckoMetadata(symbols), 21600000);
     }, geckoDelay);
 
-    // 7. Periyodik yenilemeler
     setInterval(() => loadCoinStats(),   300000);
     setInterval(() => loadGlobalStats(), 300000);
 
