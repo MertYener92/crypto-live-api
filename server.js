@@ -32,6 +32,7 @@ async function loadMetadataFromSupabase() {
 `${SUPABASE_URL}/rest/v1/assets?select=*`,      {
         headers: {
           apikey: SUPABASE_KEY,
+
           Authorization: `Bearer ${SUPABASE_KEY}`,
         },
         timeout: 10000,
@@ -357,8 +358,7 @@ app.get('/coin-info/:symbol', async (req, res) => {
   // 1. assets tablosunda description_tr var mı?
   try {
     const cached = await axios.get(
-      `${SUPABASE_URL}/rest/v1/assets?symbol=eq.${symbol}&select=description_tr,gecko_id,name`,
-      {
+`${SUPABASE_URL}/rest/v1/assets?select=*&symbol=eq.${symbol}`,      {
         headers: {
           apikey: SUPABASE_KEY,
           Authorization: `Bearer ${SUPABASE_KEY}`,
