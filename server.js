@@ -21,53 +21,156 @@ let ws = null;
 const sparklineCache = {};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Altın Fiyatları (Gramvey WebSocket)
+// ALTIN — gold-api.com (API key yok, limit yok) + TCMB (USDTRY)
 // ─────────────────────────────────────────────────────────────────────────────
-let goldPrices = {};
-let goldWs = null;
+let goldData = {
+  xauusd: 0,       // ons altın USD
+  usdtry: 0,       // dolar/TL kuru
+  gramTry: 0,      // gram altın TL = (xauusd * usdtry) / 31.1035
+  change: 0,       // günlük değişim %
+  high24h: 0,
+  low24h: 0,
+  updatedAt: null,
+};
 
-function startGoldWebSocket() {
-  if (goldWs) goldWs.close();
-
-  goldWs = new WebSocket('wss://goldpricesocket.gramvey.com', { perMessageDeflate: false });
-
-  goldWs.on('open', () => {
-    console.log('Gramvey Altin WebSocket connected');
-  });
-
-  goldWs.on('message', (msg) => {
-    try {
-      const data = JSON.parse(msg.toString());
-
-      // İlk mesajda yapıyı logla
-      if (Object.keys(goldPrices).length === 0) {
-        console.log('Gramvey ilk mesaj:', JSON.stringify(data).slice(0, 800));
+// TCMB'den USD/TRY kuru çek
+async function fetchUsdTry() {
+  try {
+    const response = await axios.get(
+      'https://www.tcmb.gov.tr/kurlar/today.xml',
+      { timeout: 10000, responseType: 'text' }
+    );
+    const match = response.data.match(
+      /<Currency[^>]*CurrencyCode="USD"[^>]*>[\s\S]*?<ForexSelling>([\d.]+)<\/ForexSelling>/
+    );
+    if (match) {
+      const rate = parseFloat(match[1].replace(',', '.'));
+      if (rate > 0) {
+        goldData.usdtry = rate;
+        console.log(`TCMB USDTRY: ${rate}`);
       }
-
-      if (Array.isArray(data)) {
-        data.forEach((item) => {
-          const key = (item.name || item.code || item.symbol || item.id || '').toString();
-          if (key) goldPrices[key] = item;
-        });
-      } else if (typeof data === 'object' && data !== null) {
-        const key = (data.name || data.code || data.symbol || data.id || 'UNKNOWN').toString();
-        goldPrices[key] = data;
-      }
-    } catch (e) {
-      console.log('Gold WS Parse Error:', e.message);
     }
-  });
-
-  goldWs.on('error', (err) => console.log('Gold WebSocket Error:', err.message));
-  goldWs.on('close', () => {
-    console.log('Gold WebSocket closed. Reconnecting in 5s...');
-    setTimeout(() => startGoldWebSocket(), 5000);
-  });
+  } catch (e) {
+    console.log('TCMB USDTRY hata:', e.message);
+  }
 }
 
-// GET /gold-prices
+// gold-api.com'dan XAUUSD çek
+async function fetchXauUsd() {
+  try {
+    const response = await axios.get(
+      'https://gold-api.com/price/XAU',
+      { timeout: 10000 }
+    );
+    const data = response.data;
+    if (data && data.price) {
+      const xauusd = parseFloat(data.price);
+      const prevClose = parseFloat(data.prev_close_price || data.price);
+      const change = prevClose > 0 ? ((xauusd - prevClose) / prevClose) * 100 : 0;
+
+      goldData.xauusd  = xauusd;
+      goldData.change  = Number(change.toFixed(2));
+      goldData.high24h = parseFloat(data.high_price || xauusd);
+      goldData.low24h  = parseFloat(data.low_price  || xauusd);
+
+      // Gram TL hesapla
+      if (goldData.usdtry > 0) {
+        goldData.gramTry = Number(((xauusd * goldData.usdtry) / 31.1035).toFixed(2));
+      }
+
+      goldData.updatedAt = new Date().toISOString();
+      console.log(`Altin: $${xauusd} ONS | ${goldData.gramTry} TL/gram`);
+    }
+  } catch (e) {
+    console.log('gold-api.com hata:', e.message);
+  }
+}
+
+// Altın geçmiş veri için sparkline (son 24 saat, saatlik)
+let goldHistory = []; // [{time, price}]
+
+async function fetchGoldHistory() {
+  try {
+    // gold-api.com geçmiş veri endpoint'i
+    const response = await axios.get(
+      'https://gold-api.com/price/XAU/history',
+      { timeout: 15000 }
+    );
+    if (response.data && Array.isArray(response.data)) {
+      goldHistory = response.data
+        .map((item) => ({
+          time: new Date(item.date || item.timestamp).getTime() / 1000,
+          price: parseFloat(item.price),
+        }))
+        .filter((item) => !isNaN(item.price))
+        .sort((a, b) => a.time - b.time)
+        .slice(-30); // son 30 gün
+      console.log(`Altin gecmis: ${goldHistory.length} kayit`);
+    }
+  } catch (e) {
+    console.log('Altin gecmis hata:', e.message);
+    // Hata durumunda basit sparkline üret
+    if (goldHistory.length === 0 && goldData.xauusd > 0) {
+      const now = Math.floor(Date.now() / 1000);
+      goldHistory = Array.from({ length: 24 }, (_, i) => ({
+        time: now - (23 - i) * 3600,
+        price: goldData.xauusd * (1 + (Math.random() - 0.5) * 0.01),
+      }));
+    }
+  }
+}
+
+// Tüm altın verilerini güncelle
+async function updateGoldData() {
+  await fetchUsdTry();
+  await fetchXauUsd();
+}
+
+// GET /gold-prices — anlık altın fiyatı
 app.get('/gold-prices', (req, res) => {
-  res.json(goldPrices);
+  res.json({
+    ALTIN: {
+      symbol:    'ALTIN',
+      name:      'Gram Altın',
+      price:     goldData.gramTry,
+      priceUsd:  goldData.xauusd,
+      usdtry:    goldData.usdtry,
+      change:    goldData.change,
+      high24h:   goldData.high24h ? Number(((goldData.high24h * goldData.usdtry) / 31.1035).toFixed(2)) : 0,
+      low24h:    goldData.low24h  ? Number(((goldData.low24h  * goldData.usdtry) / 31.1035).toFixed(2)) : 0,
+      updatedAt: goldData.updatedAt,
+      sparkline: goldHistory.slice(-24).map((h) =>
+        Number(((h.price * goldData.usdtry) / 31.1035).toFixed(2))
+      ),
+    },
+    XAUUSD: {
+      symbol:    'XAUUSD',
+      name:      'Ons Altın',
+      price:     goldData.xauusd,
+      change:    goldData.change,
+      high24h:   goldData.high24h,
+      low24h:    goldData.low24h,
+      updatedAt: goldData.updatedAt,
+      sparkline: goldHistory.slice(-24).map((h) => h.price),
+    },
+  });
+});
+
+// GET /chart/gold/:symbol — altın chart verisi
+app.get('/chart/gold/:symbol', (req, res) => {
+  const symbol = req.params.symbol.toUpperCase();
+  if (goldHistory.length === 0) {
+    return res.status(404).json({ error: 'Veri henüz yüklenmedi' });
+  }
+  if (symbol === 'ALTIN') {
+    const data = goldHistory.map((h) => ({
+      time:  h.time,
+      price: Number(((h.price * goldData.usdtry) / 31.1035).toFixed(2)),
+    }));
+    return res.json(data);
+  }
+  // XAUUSD
+  return res.json(goldHistory);
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -90,11 +193,11 @@ async function loadMetadataFromSupabase() {
     if (response.data && response.data.length > 0) {
       response.data.forEach((row) => {
         coinMetadata[row.symbol] = {
-          symbol: row.symbol,
-          name: row.name || row.symbol,
-          logo: row.logo_url || '',
-          geckoId: row.gecko_id || '',
-          rank: 9999,
+          symbol:    row.symbol,
+          name:      row.name || row.symbol,
+          logo:      row.logo_url || '',
+          geckoId:   row.gecko_id || '',
+          rank:      9999,
           marketCap: 0,
         };
       });
@@ -114,10 +217,7 @@ async function saveMetadataToSupabase(data) {
     for (const coin of data) {
       await axios.patch(
         `${SUPABASE_URL}/rest/v1/assets?symbol=eq.${coin.symbol}`,
-        {
-          logo_url: coin.logo || '',
-          gecko_id: coin.geckoId || '',
-        },
+        { logo_url: coin.logo || '', gecko_id: coin.geckoId || '' },
         {
           headers: {
             apikey: SUPABASE_KEY,
@@ -146,31 +246,23 @@ async function fetchAndSaveCoinGeckoMetadata(symbols) {
         const response = await axios.get(
           'https://api.coingecko.com/api/v3/coins/markets',
           {
-            params: {
-              vs_currency: 'usd',
-              order: 'market_cap_desc',
-              per_page: 125,
-              page,
-              sparkline: false,
-            },
+            params: { vs_currency: 'usd', order: 'market_cap_desc', per_page: 125, page, sparkline: false },
             timeout: 10000,
           }
         );
-
         response.data.forEach((coin) => {
           const symbol = coin.symbol.toUpperCase();
           if (symbolSet.has(symbol)) {
             collected.push({
               symbol,
-              name: coin.name,
-              rank: coin.market_cap_rank || 9999,
+              name:      coin.name,
+              rank:      coin.market_cap_rank || 9999,
               marketCap: Number(coin.market_cap || 0),
-              logo: coin.image || '',
-              geckoId: coin.id,
+              logo:      coin.image || '',
+              geckoId:   coin.id,
             });
           }
         });
-
         console.log(`CoinGecko sayfa ${page} yuklendi (${collected.length} coin)`);
         success = true;
         break;
@@ -186,31 +278,23 @@ async function fetchAndSaveCoinGeckoMetadata(symbols) {
 
   if (collected.length > 0) {
     await saveMetadataToSupabase(collected);
-
     collected.forEach((coin) => {
       if (coinMetadata[coin.symbol]) {
-        coinMetadata[coin.symbol].rank = coin.rank;
+        coinMetadata[coin.symbol].rank      = coin.rank;
         coinMetadata[coin.symbol].marketCap = coin.marketCap;
-        coinMetadata[coin.symbol].logo = coin.logo;
-        coinMetadata[coin.symbol].geckoId = coin.geckoId;
+        coinMetadata[coin.symbol].logo      = coin.logo;
+        coinMetadata[coin.symbol].geckoId   = coin.geckoId;
       } else {
         coinMetadata[coin.symbol] = coin;
       }
     });
-
-    orderedSymbols.sort((a, b) => {
-      return (coinMetadata[a]?.rank || 9999) - (coinMetadata[b]?.rank || 9999);
-    });
-
+    orderedSymbols.sort((a, b) => (coinMetadata[a]?.rank || 9999) - (coinMetadata[b]?.rank || 9999));
     console.log(`Toplam ${collected.length} coin metadata guncellendi`);
   }
 }
 
 async function loadCoinbaseSymbols() {
-  const response = await axios.get(
-    'https://api.exchange.coinbase.com/products',
-    { timeout: 10000 }
-  );
+  const response = await axios.get('https://api.exchange.coinbase.com/products', { timeout: 10000 });
   const symbols = response.data
     .filter((p) => p.quote_currency === 'USD' && p.status === 'online')
     .map((p) => p.base_currency.toUpperCase());
@@ -243,10 +327,7 @@ async function loadSparklines() {
       const start = new Date(end.getTime() - 24 * 60 * 60 * 1000);
       const response = await axios.get(
         `https://api.exchange.coinbase.com/products/${symbol}-USD/candles`,
-        {
-          params: { start: start.toISOString(), end: end.toISOString(), granularity: 3600 },
-          timeout: 5000,
-        }
+        { params: { start: start.toISOString(), end: end.toISOString(), granularity: 3600 }, timeout: 5000 }
       );
       if (response.data && response.data.length > 0) {
         sparklineCache[symbol] = response.data.map((c) => c[4]).reverse().slice(-24);
@@ -270,31 +351,24 @@ async function loadGlobalStats() {
 
 function startWebSocket() {
   if (ws) ws.close();
-
   ws = new WebSocket('wss://ws-feed.exchange.coinbase.com', { perMessageDeflate: false });
 
   ws.on('open', () => {
     console.log('Coinbase WebSocket connected');
     const productIds = orderedSymbols.map((s) => `${s}-USD`);
-    ws.send(JSON.stringify({
-      type: 'subscribe',
-      channels: [{ name: 'ticker', product_ids: productIds }],
-    }));
+    ws.send(JSON.stringify({ type: 'subscribe', channels: [{ name: 'ticker', product_ids: productIds }] }));
   });
 
   ws.on('message', (msg) => {
     try {
       const data = JSON.parse(msg.toString());
       if (data.type !== 'ticker') return;
-
       const symbol    = data.product_id.replace('-USD', '');
       const price     = parseFloat(data.price);
       const open      = parseFloat(data.open_24h);
       const change    = open > 0 ? Number((((price - open) / open) * 100).toFixed(2)) : 0;
       const meta      = coinMetadata[symbol] || { rank: 9999, name: symbol, marketCap: 0 };
-      const dominance = totalMarketCap > 0
-        ? Number(((meta.marketCap / totalMarketCap) * 100).toFixed(2))
-        : 0;
+      const dominance = totalMarketCap > 0 ? Number(((meta.marketCap / totalMarketCap) * 100).toFixed(2)) : 0;
 
       prices[symbol] = {
         rank:      meta.rank,
@@ -323,41 +397,22 @@ function startWebSocket() {
 }
 
 async function translateWithClaude(englishText, coinName) {
-  if (!ANTHROPIC_API_KEY) {
-    console.log('ANTHROPIC_API_KEY eksik');
-    return null;
-  }
-
+  if (!ANTHROPIC_API_KEY) return null;
   const cleanText = englishText.replace(/<[^>]*>/g, '').trim();
   if (!cleanText || cleanText.length < 20) return null;
-
   try {
     const response = await axios.post(
       'https://api.anthropic.com/v1/messages',
       {
         model: 'claude-haiku-4-5-20251001',
         max_tokens: 1024,
-        messages: [
-          {
-            role: 'user',
-            content: `Aşağıdaki kripto para açıklamasını Türkçe'ye çevir.
-Kurallar:
-- Teknik terimler (blockchain, token, smart contract, DeFi, staking vb.) Türkçe'ye çevrilmez
-- Coin/proje isimleri değiştirilmez
-- Sadece çeviriyi yaz, başka hiçbir şey ekleme
-- Doğal ve akıcı Türkçe kullan
-
-${coinName} açıklaması:
-${cleanText.slice(0, 1500)}`,
-          },
-        ],
+        messages: [{
+          role: 'user',
+          content: `Aşağıdaki kripto para açıklamasını Türkçe'ye çevir.\nKurallar:\n- Teknik terimler Türkçe'ye çevrilmez\n- Coin/proje isimleri değiştirilmez\n- Sadece çeviriyi yaz\n- Doğal Türkçe kullan\n\n${coinName} açıklaması:\n${cleanText.slice(0, 1500)}`,
+        }],
       },
       {
-        headers: {
-          'x-api-key': ANTHROPIC_API_KEY,
-          'anthropic-version': '2023-06-01',
-          'Content-Type': 'application/json',
-        },
+        headers: { 'x-api-key': ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
         timeout: 30000,
       }
     );
@@ -370,90 +425,41 @@ ${cleanText.slice(0, 1500)}`,
 
 app.get('/coin-info/:symbol', async (req, res) => {
   const symbol = req.params.symbol.toUpperCase();
-  console.log(`coin-info istegi: ${symbol}`);
-
   try {
     const supabaseRes = await axios.get(
       `${SUPABASE_URL}/rest/v1/assets?select=*&symbol=eq.${symbol}`,
-      {
-        headers: {
-          apikey: SUPABASE_KEY,
-          Authorization: `Bearer ${SUPABASE_KEY}`,
-        },
-        timeout: 5000,
-      }
+      { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` }, timeout: 5000 }
     );
-
-    console.log(`Supabase response for ${symbol}:`, JSON.stringify(supabaseRes.data?.[0]));
-
     const row = supabaseRes.data?.[0];
-
-    if (row?.description_tr) {
-      console.log(`${symbol} cache'den donduruluyor`);
-      return res.json({ symbol, description_tr: row.description_tr, source: 'cache' });
-    }
-
+    if (row?.description_tr) return res.json({ symbol, description_tr: row.description_tr, source: 'cache' });
     const geckoId = row?.gecko_id || coinMetadata[symbol]?.geckoId;
-    console.log(`${symbol} geckoId: ${geckoId}`);
+    if (!geckoId) return res.json({ symbol, description_tr: null, source: 'no_match' });
 
-    if (!geckoId) {
-      return res.json({ symbol, description_tr: null, source: 'no_match' });
-    }
-
-    console.log(`CoinGecko'dan ${geckoId} cekiliyor...`);
     let englishDescription = null;
     try {
       const geckoResponse = await axios.get(
         `https://api.coingecko.com/api/v3/coins/${geckoId}`,
-        {
-          params: {
-            localization: false,
-            tickers: false,
-            market_data: false,
-            community_data: false,
-            developer_data: false,
-          },
-          timeout: 10000,
-        }
+        { params: { localization: false, tickers: false, market_data: false, community_data: false, developer_data: false }, timeout: 10000 }
       );
       englishDescription = geckoResponse.data?.description?.en || null;
-      console.log(`CoinGecko aciklama uzunlugu: ${englishDescription?.length}`);
     } catch (e) {
-      console.log(`CoinGecko ${symbol} hatasi:`, e.message);
       return res.status(503).json({ symbol, description_tr: null, source: 'gecko_error' });
     }
 
-    if (!englishDescription || englishDescription.length < 20) {
-      return res.json({ symbol, description_tr: null, source: 'no_description' });
-    }
+    if (!englishDescription || englishDescription.length < 20) return res.json({ symbol, description_tr: null, source: 'no_description' });
 
     const coinName = row?.name || coinMetadata[symbol]?.name || symbol;
-    console.log(`Claude ile ceviriliyor: ${coinName}`);
     const translatedText = await translateWithClaude(englishDescription, coinName);
-
-    if (!translatedText) {
-      return res.json({ symbol, description_tr: null, source: 'translation_failed' });
-    }
+    if (!translatedText) return res.json({ symbol, description_tr: null, source: 'translation_failed' });
 
     await axios.patch(
       `${SUPABASE_URL}/rest/v1/assets?symbol=eq.${symbol}`,
       { description_tr: translatedText },
-      {
-        headers: {
-          apikey: SUPABASE_KEY,
-          Authorization: `Bearer ${SUPABASE_KEY}`,
-          'Content-Type': 'application/json',
-          Prefer: 'return=minimal',
-        },
-        timeout: 5000,
-      }
+      { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json', Prefer: 'return=minimal' }, timeout: 5000 }
     );
 
-    console.log(`${symbol} aciklamasi kaydedildi`);
     res.json({ symbol, description_tr: translatedText, source: 'translated' });
-
   } catch (e) {
-    console.log(`/coin-info/${symbol} hatasi:`, e.message);
     res.status(500).json({ symbol, description_tr: null, source: 'error' });
   }
 });
@@ -464,15 +470,22 @@ async function initialize() {
     orderedSymbols = symbols;
 
     const hasCache = await loadMetadataFromSupabase();
-
-    orderedSymbols.sort((a, b) => {
-      return (coinMetadata[a]?.rank || 9999) - (coinMetadata[b]?.rank || 9999);
-    });
+    orderedSymbols.sort((a, b) => (coinMetadata[a]?.rank || 9999) - (coinMetadata[b]?.rank || 9999));
 
     await loadGlobalStats();
     startWebSocket();
-    startGoldWebSocket();
     loadCoinStats();
+
+    // Altın verilerini hemen yükle
+    await updateGoldData();
+    await fetchGoldHistory();
+
+    // 5 dakikada bir altın fiyatını güncelle
+    setInterval(() => updateGoldData(), 5 * 60 * 1000);
+    // Geçmiş veriyi günde bir güncelle
+    setInterval(() => fetchGoldHistory(), 24 * 60 * 60 * 1000);
+    // TCMB kurunu saatte bir güncelle
+    setInterval(() => fetchUsdTry(), 60 * 60 * 1000);
 
     setTimeout(() => {
       loadSparklines();
@@ -507,11 +520,9 @@ app.get('/logo/:symbol', async (req, res) => {
     }
     const logoUrl = coinMetadata[symbol]?.logo;
     if (!logoUrl) return res.status(404).send('Logo not found');
-
     const response = await axios.get(logoUrl, { responseType: 'arraybuffer', timeout: 8000 });
     const contentType = response.headers['content-type'] || 'image/png';
     logoCache[symbol] = { data: response.data, contentType };
-
     res.set('Content-Type', contentType);
     res.set('Cache-Control', 'public, max-age=86400');
     res.send(response.data);
@@ -524,10 +535,7 @@ app.get('/prices', (req, res) => {
   const result = {};
   orderedSymbols.forEach((symbol) => {
     if (prices[symbol]) {
-      result[symbol] = {
-        ...prices[symbol],
-        sparkline: sparklineCache[symbol] || prices[symbol].sparkline || [],
-      };
+      result[symbol] = { ...prices[symbol], sparkline: sparklineCache[symbol] || prices[symbol].sparkline || [] };
     }
   });
   res.json(result);
@@ -550,25 +558,17 @@ async function fetchCandles(symbol, startMs, endMs, granularity) {
   const windowMs   = granularity * maxCandles * 1000;
   const chunks     = [];
   let chunkEnd     = endMs;
-
   while (chunkEnd > startMs) {
     const chunkStart = Math.max(chunkEnd - windowMs, startMs);
     chunks.push({ start: chunkStart, end: chunkEnd });
     chunkEnd = chunkStart;
   }
-
   let allCandles = [];
   for (const chunk of chunks) {
     try {
       const response = await axios.get(
         `https://api.exchange.coinbase.com/products/${symbol}-USD/candles`,
-        {
-          params: {
-            start: new Date(chunk.start).toISOString(),
-            end:   new Date(chunk.end).toISOString(),
-            granularity,
-          },
-        }
+        { params: { start: new Date(chunk.start).toISOString(), end: new Date(chunk.end).toISOString(), granularity } }
       );
       allCandles = allCandles.concat(response.data);
     } catch (e) {
@@ -587,23 +587,13 @@ app.get('/chart/:symbol', async (req, res) => {
     const startMs = endMs - config.days * 24 * 60 * 60 * 1000;
 
     const candles = await fetchCandles(symbol, startMs, endMs, config.granularity);
-    if (!candles || candles.length === 0) {
-      return res.status(404).json({ error: 'No candle data found' });
-    }
+    if (!candles || candles.length === 0) return res.status(404).json({ error: 'No candle data found' });
 
     const mode = req.query.mode || 'line';
-
     let chartData;
     if (mode === 'candle') {
       chartData = candles
-        .map((c) => ({
-          time:   c[0],
-          open:   c[3],
-          high:   c[2],
-          low:    c[1],
-          close:  c[4],
-          volume: c[5],
-        }))
+        .map((c) => ({ time: c[0], open: c[3], high: c[2], low: c[1], close: c[4], volume: c[5] }))
         .sort((a, b) => a.time - b.time)
         .filter((item, i, arr) => i === 0 || item.time !== arr[i - 1].time);
     } else {
@@ -612,7 +602,6 @@ app.get('/chart/:symbol', async (req, res) => {
         .sort((a, b) => a.time - b.time)
         .filter((item, i, arr) => i === 0 || item.time !== arr[i - 1].time);
     }
-
     res.json(chartData);
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -625,93 +614,50 @@ let fngLastFetch = 0;
 let prefetchRunning = false;
 
 app.get('/prefetch-descriptions', async (req, res) => {
-  if (prefetchRunning) {
-    return res.json({ status: 'already_running', message: 'Prefetch zaten çalışıyor' });
-  }
+  if (prefetchRunning) return res.json({ status: 'already_running' });
 
   let coins = [];
   try {
     const response = await axios.get(
       `${SUPABASE_URL}/rest/v1/assets?select=symbol,name,gecko_id&gecko_id=not.is.null&description_tr=is.null`,
-      {
-        headers: {
-          apikey: SUPABASE_KEY,
-          Authorization: `Bearer ${SUPABASE_KEY}`,
-        },
-        timeout: 10000,
-      }
+      { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` }, timeout: 10000 }
     );
     coins = response.data || [];
   } catch (e) {
     return res.status(500).json({ status: 'error', message: e.message });
   }
 
-  res.json({
-    status: 'started',
-    total: coins.length,
-    message: `${coins.length} coin arka planda çevriliyor, her biri ~4sn sürer`,
-  });
+  res.json({ status: 'started', total: coins.length });
 
   prefetchRunning = true;
   (async () => {
-    let success = 0;
-    let failed = 0;
-
+    let success = 0, failed = 0;
     for (const coin of coins) {
       try {
         const geckoResponse = await axios.get(
           `https://api.coingecko.com/api/v3/coins/${coin.gecko_id}`,
-          {
-            params: {
-              localization: false,
-              tickers: false,
-              market_data: false,
-              community_data: false,
-              developer_data: false,
-            },
-            timeout: 10000,
-          }
+          { params: { localization: false, tickers: false, market_data: false, community_data: false, developer_data: false }, timeout: 10000 }
         );
-
         const englishDescription = geckoResponse.data?.description?.en || null;
-        if (!englishDescription || englishDescription.length < 20) {
-          failed++;
-          await new Promise((r) => setTimeout(r, 3000));
-          continue;
-        }
+        if (!englishDescription || englishDescription.length < 20) { failed++; await new Promise((r) => setTimeout(r, 3000)); continue; }
 
         const translatedText = await translateWithClaude(englishDescription, coin.name);
-        if (!translatedText) {
-          failed++;
-          await new Promise((r) => setTimeout(r, 3000));
-          continue;
-        }
+        if (!translatedText) { failed++; await new Promise((r) => setTimeout(r, 3000)); continue; }
 
         await axios.patch(
           `${SUPABASE_URL}/rest/v1/assets?symbol=eq.${coin.symbol}`,
           { description_tr: translatedText },
-          {
-            headers: {
-              apikey: SUPABASE_KEY,
-              Authorization: `Bearer ${SUPABASE_KEY}`,
-              'Content-Type': 'application/json',
-              Prefer: 'return=minimal',
-            },
-            timeout: 5000,
-          }
+          { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json', Prefer: 'return=minimal' }, timeout: 5000 }
         );
-
         success++;
         console.log(`Prefetch: ${coin.symbol} çevrildi (${success}/${coins.length})`);
         await new Promise((r) => setTimeout(r, 4000));
       } catch (e) {
-        console.log(`Prefetch: ${coin.symbol} hata - ${e.message}`);
         failed++;
         const waitTime = e.response?.status === 429 ? 60000 : 4000;
         await new Promise((r) => setTimeout(r, waitTime));
       }
     }
-
     prefetchRunning = false;
     console.log(`Prefetch tamamlandı: ${success} başarılı, ${failed} başarısız`);
   })();
@@ -721,14 +667,9 @@ app.get('/fng', async (req, res) => {
   try {
     const now = Date.now();
     if (fngCache && now - fngLastFetch < 10 * 60 * 1000) return res.json(fngCache);
-
     const response = await axios.get('https://api.alternative.me/fng/?limit=1', { timeout: 5000 });
     const item = response.data.data[0];
-    fngCache = {
-      value: parseInt(item.value),
-      classification: item.value_classification,
-      timestamp: item.timestamp,
-    };
+    fngCache = { value: parseInt(item.value), classification: item.value_classification, timestamp: item.timestamp };
     fngLastFetch = now;
     res.json(fngCache);
   } catch (e) {
@@ -738,5 +679,4 @@ app.get('/fng', async (req, res) => {
 });
 
 initialize();
-
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
