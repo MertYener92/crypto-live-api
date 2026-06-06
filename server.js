@@ -232,7 +232,15 @@ async function fetchSarrafiye() {
       },
     };
 
-    console.log(`Sarrafiye yuklendi: Ceyrek=${sarrafiyeData.CEYREK_YENI.price} TEK=${sarrafiyeData.TEK_YENI.price}`);
+    // Gümüş değişim hesapla
+    const newSilverPrice = sarrafiyeData.GUMUS?.price || 0;
+    if (newSilverPrice > 0) {
+      const prevSilver = goldData.gramSilverTry > 0 ? goldData.gramSilverTry : newSilverPrice;
+      goldData.silverChange  = Number((((newSilverPrice - prevSilver) / prevSilver) * 100).toFixed(2));
+      goldData.gramSilverTry = newSilverPrice;
+    }
+
+    console.log(`Sarrafiye yuklendi: Ceyrek=${sarrafiyeData.CEYREK_YENI.price} TEK=${sarrafiyeData.TEK_YENI.price} Gumus=${sarrafiyeData.GUMUS.price}`);
     
   } catch (e) {
     console.log('Truncgil sarrafiye hata:', e.message);
@@ -365,13 +373,17 @@ app.get('/gold-prices', (req, res) => {
     GUMUS: {
       symbol:    'GUMUS',
       name:      'Gram Gümüş',
-      price:     goldData.gramSilverTry,
-      priceUsd:  goldData.xagusd,
+      price:     sarrafiyeData.GUMUS?.price || goldData.gramSilverTry,
       change:    goldData.silverChange,
-      high24h:   goldData.silverHigh24h ? Number(((goldData.silverHigh24h * goldData.usdtry) / 31.1035).toFixed(2)) : 0,
-      low24h:    goldData.silverLow24h  ? Number(((goldData.silverLow24h  * goldData.usdtry) / 31.1035).toFixed(2)) : 0,
+      high24h:   0,
+      low24h:    0,
       updatedAt: goldData.updatedAt,
-      sparkline: [],
+      sparkline: goldHistory.slice(-24).map((h) => {
+        const ratio = goldData.xauusd > 0 && sarrafiyeData.GUMUS?.price > 0
+          ? sarrafiyeData.GUMUS.price / goldData.gramTry
+          : 0.028;
+        return Number(((h.price * goldData.usdtry) / 31.1035 * ratio).toFixed(4));
+      }),
     },
   });
 });
