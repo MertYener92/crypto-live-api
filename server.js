@@ -66,8 +66,11 @@ async function fetchXauUsd() {
         headers: { 'X-API-KEY': GOLD_API_KEY },
       }
     );
-    const data = response.data;
-    // Response: { ounce_in_usd: 4665.82, ... }
+    // Response string veya object gelebilir
+    let data = response.data;
+    if (typeof data === 'string') {
+      try { data = JSON.parse(data); } catch(_) {}
+    }
     const xauusd = parseFloat(String(data.ounce_price_usd || data.ounce_in_usd || data.price || data.XAU || '0').replace(/,/g, ''));
 
     if (xauusd > 0) {
