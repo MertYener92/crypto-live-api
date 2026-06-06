@@ -68,7 +68,7 @@ async function fetchXauUsd() {
     );
     const data = response.data;
     // Response: { ounce_in_usd: 4665.82, ... }
-    const xauusd = parseFloat(data.ounce_in_usd || data.price || data.XAU || 0);
+    const xauusd = parseFloat(data.ounce_price_usd || data.ounce_in_usd || data.price || data.XAU || 0);
 
     if (xauusd > 0) {
       const prevClose = goldData.xauusd > 0 ? goldData.xauusd : xauusd;
