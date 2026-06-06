@@ -10,7 +10,6 @@ const PORT = process.env.PORT || 10000;
 
 const SUPABASE_URL = 'https://edmvkecnitzueryzylpo.supabase.co';
 const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVkbXZrZWNuaXR6dWVyeXp5bHBvIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3OTYwNzg5OSwiZXhwIjoyMDk1MTgzODk5fQ.HQpDHbG1N-oEyvDOJFXH5yO3tpG9s-9_meeqLOkmM3k';
-
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || '';
 
 let prices = {};
@@ -21,6 +20,59 @@ let totalMarketCap = 0;
 let ws = null;
 const sparklineCache = {};
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Altın Fiyatları (Gramvey WebSocket)
+// ─────────────────────────────────────────────────────────────────────────────
+let goldPrices = {};
+let goldWs = null;
+
+function startGoldWebSocket() {
+  if (goldWs) goldWs.close();
+
+  goldWs = new WebSocket('wss://goldpricesocket.gramvey.com', { perMessageDeflate: false });
+
+  goldWs.on('open', () => {
+    console.log('Gramvey Altin WebSocket connected');
+  });
+
+  goldWs.on('message', (msg) => {
+    try {
+      const data = JSON.parse(msg.toString());
+
+      // İlk mesajda yapıyı logla
+      if (Object.keys(goldPrices).length === 0) {
+        console.log('Gramvey ilk mesaj:', JSON.stringify(data).slice(0, 800));
+      }
+
+      if (Array.isArray(data)) {
+        data.forEach((item) => {
+          const key = (item.name || item.code || item.symbol || item.id || '').toString();
+          if (key) goldPrices[key] = item;
+        });
+      } else if (typeof data === 'object' && data !== null) {
+        const key = (data.name || data.code || data.symbol || data.id || 'UNKNOWN').toString();
+        goldPrices[key] = data;
+      }
+    } catch (e) {
+      console.log('Gold WS Parse Error:', e.message);
+    }
+  });
+
+  goldWs.on('error', (err) => console.log('Gold WebSocket Error:', err.message));
+  goldWs.on('close', () => {
+    console.log('Gold WebSocket closed. Reconnecting in 5s...');
+    setTimeout(() => startGoldWebSocket(), 5000);
+  });
+}
+
+// GET /gold-prices
+app.get('/gold-prices', (req, res) => {
+  res.json(goldPrices);
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Supabase — assets tablosundan metadata oku
+// ─────────────────────────────────────────────────────────────────────────────
 async function loadMetadataFromSupabase() {
   try {
     console.log('Supabase assets yukleniyor...');
@@ -321,7 +373,6 @@ app.get('/coin-info/:symbol', async (req, res) => {
   console.log(`coin-info istegi: ${symbol}`);
 
   try {
-    // 1. Supabase'den oku
     const supabaseRes = await axios.get(
       `${SUPABASE_URL}/rest/v1/assets?select=*&symbol=eq.${symbol}`,
       {
@@ -337,13 +388,11 @@ app.get('/coin-info/:symbol', async (req, res) => {
 
     const row = supabaseRes.data?.[0];
 
-    // 2. Cache'de varsa döndür
     if (row?.description_tr) {
       console.log(`${symbol} cache'den donduruluyor`);
       return res.json({ symbol, description_tr: row.description_tr, source: 'cache' });
     }
 
-    // 3. gecko_id yoksa eşleşme yok
     const geckoId = row?.gecko_id || coinMetadata[symbol]?.geckoId;
     console.log(`${symbol} geckoId: ${geckoId}`);
 
@@ -351,7 +400,6 @@ app.get('/coin-info/:symbol', async (req, res) => {
       return res.json({ symbol, description_tr: null, source: 'no_match' });
     }
 
-    // 4. CoinGecko'dan İngilizce açıklama çek
     console.log(`CoinGecko'dan ${geckoId} cekiliyor...`);
     let englishDescription = null;
     try {
@@ -379,7 +427,6 @@ app.get('/coin-info/:symbol', async (req, res) => {
       return res.json({ symbol, description_tr: null, source: 'no_description' });
     }
 
-    // 5. Claude ile çevir
     const coinName = row?.name || coinMetadata[symbol]?.name || symbol;
     console.log(`Claude ile ceviriliyor: ${coinName}`);
     const translatedText = await translateWithClaude(englishDescription, coinName);
@@ -388,7 +435,6 @@ app.get('/coin-info/:symbol', async (req, res) => {
       return res.json({ symbol, description_tr: null, source: 'translation_failed' });
     }
 
-    // 6. Supabase'e kaydet
     await axios.patch(
       `${SUPABASE_URL}/rest/v1/assets?symbol=eq.${symbol}`,
       { description_tr: translatedText },
@@ -425,6 +471,7 @@ async function initialize() {
 
     await loadGlobalStats();
     startWebSocket();
+    startGoldWebSocket();
     loadCoinStats();
 
     setTimeout(() => {
@@ -575,10 +622,6 @@ app.get('/chart/:symbol', async (req, res) => {
 let fngCache = null;
 let fngLastFetch = 0;
 
-// ─────────────────────────────────────────────────────────────────────────────
-// GET /prefetch-descriptions
-// gecko_id dolu ama description_tr boş olan tüm coinleri çevirir
-// ─────────────────────────────────────────────────────────────────────────────
 let prefetchRunning = false;
 
 app.get('/prefetch-descriptions', async (req, res) => {
@@ -586,7 +629,6 @@ app.get('/prefetch-descriptions', async (req, res) => {
     return res.json({ status: 'already_running', message: 'Prefetch zaten çalışıyor' });
   }
 
-  // Supabase'den gecko_id dolu ama description_tr boş coinleri çek
   let coins = [];
   try {
     const response = await axios.get(
@@ -610,7 +652,6 @@ app.get('/prefetch-descriptions', async (req, res) => {
     message: `${coins.length} coin arka planda çevriliyor, her biri ~4sn sürer`,
   });
 
-  // Arka planda çalıştır
   prefetchRunning = true;
   (async () => {
     let success = 0;
@@ -618,7 +659,6 @@ app.get('/prefetch-descriptions', async (req, res) => {
 
     for (const coin of coins) {
       try {
-        // CoinGecko'dan çek
         const geckoResponse = await axios.get(
           `https://api.coingecko.com/api/v3/coins/${coin.gecko_id}`,
           {
@@ -640,7 +680,6 @@ app.get('/prefetch-descriptions', async (req, res) => {
           continue;
         }
 
-        // Claude ile çevir
         const translatedText = await translateWithClaude(englishDescription, coin.name);
         if (!translatedText) {
           failed++;
@@ -648,7 +687,6 @@ app.get('/prefetch-descriptions', async (req, res) => {
           continue;
         }
 
-        // Supabase'e kaydet
         await axios.patch(
           `${SUPABASE_URL}/rest/v1/assets?symbol=eq.${coin.symbol}`,
           { description_tr: translatedText },
@@ -665,13 +703,10 @@ app.get('/prefetch-descriptions', async (req, res) => {
 
         success++;
         console.log(`Prefetch: ${coin.symbol} çevrildi (${success}/${coins.length})`);
-
-        // Rate limit için 4sn bekle
         await new Promise((r) => setTimeout(r, 4000));
       } catch (e) {
         console.log(`Prefetch: ${coin.symbol} hata - ${e.message}`);
         failed++;
-        // 429 rate limit hatası ise daha uzun bekle
         const waitTime = e.response?.status === 429 ? 60000 : 4000;
         await new Promise((r) => setTimeout(r, waitTime));
       }
