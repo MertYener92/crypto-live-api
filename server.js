@@ -173,6 +173,7 @@ async function fetchSarrafiye() {
     };
 
     console.log(`Sarrafiye yuklendi: Ceyrek=${sarrafiyeData.CEYREK_YENI.price} TEK=${sarrafiyeData.TEK_YENI.price}`);
+    console.log('Truncgil raw sample:', JSON.stringify(data).slice(0, 400));
   } catch (e) {
     console.log('Truncgil sarrafiye hata:', e.message);
   }
