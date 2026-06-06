@@ -544,10 +544,27 @@ app.get('/chart/:symbol', async (req, res) => {
       return res.status(404).json({ error: 'No candle data found' });
     }
 
-    const chartData = candles
-      .map((c) => ({ time: c[0], price: c[4] }))
-      .sort((a, b) => a.time - b.time)
-      .filter((item, i, arr) => i === 0 || item.time !== arr[i - 1].time);
+    const mode = req.query.mode || 'line';
+
+    let chartData;
+    if (mode === 'candle') {
+      chartData = candles
+        .map((c) => ({
+          time:   c[0],
+          open:   c[3],
+          high:   c[2],
+          low:    c[1],
+          close:  c[4],
+          volume: c[5],
+        }))
+        .sort((a, b) => a.time - b.time)
+        .filter((item, i, arr) => i === 0 || item.time !== arr[i - 1].time);
+    } else {
+      chartData = candles
+        .map((c) => ({ time: c[0], price: c[4] }))
+        .sort((a, b) => a.time - b.time)
+        .filter((item, i, arr) => i === 0 || item.time !== arr[i - 1].time);
+    }
 
     res.json(chartData);
   } catch (e) {
