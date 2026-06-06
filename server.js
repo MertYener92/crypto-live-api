@@ -124,19 +124,88 @@ function appendGoldHistory() {
   }
 }
 
+// Truncgil'den sarrafiye fiyatları çek (ücretsiz, API key yok)
+let sarrafiyeData = {};
+
+async function fetchSarrafiye() {
+  try {
+    const response = await axios.get(
+      'https://finans.truncgil.com/today.json',
+      { timeout: 10000 }
+    );
+    const data = response.data;
+
+    // Fiyat string'i parse et: "10.741,00" → 10741.00
+    const parsePrice = (val) => {
+      if (!val) return 0;
+      return parseFloat(String(val).replace(/\./g, '').replace(',', '.')) || 0;
+    };
+
+    sarrafiyeData = {
+      CEYREK_YENI: {
+        symbol: 'CEYREK_YENI',
+        name:   'Çeyrek Altın',
+        price:  parsePrice(data['Çeyrek Altın']?.Satış),
+        bid:    parsePrice(data['Çeyrek Altın']?.Alış),
+        change: 0,
+      },
+      YARIM_YENI: {
+        symbol: 'YARIM_YENI',
+        name:   'Yarım Altın',
+        price:  parsePrice(data['Yarım Altın']?.Satış),
+        bid:    parsePrice(data['Yarım Altın']?.Alış),
+        change: 0,
+      },
+      TEK_YENI: {
+        symbol: 'TEK_YENI',
+        name:   'Tam Altın',
+        price:  parsePrice(data['Tam Altın']?.Satış),
+        bid:    parsePrice(data['Tam Altın']?.Alış),
+        change: 0,
+      },
+      XAUUSD_TR: {
+        symbol: 'XAUUSD',
+        name:   'Ons Altın',
+        price:  parsePrice(data['Ons']?.Satış),
+        bid:    parsePrice(data['Ons']?.Alış),
+        change: 0,
+      },
+    };
+
+    console.log(`Sarrafiye yuklendi: Ceyrek=${sarrafiyeData.CEYREK_YENI.price} TEK=${sarrafiyeData.TEK_YENI.price}`);
+  } catch (e) {
+    console.log('Truncgil sarrafiye hata:', e.message);
+  }
+}
+
 // Tüm altın verilerini güncelle
 async function updateGoldData() {
   await fetchUsdTry();
   await fetchXauUsd();
+  await fetchSarrafiye();
 }
+
+// Sarrafiye katsayıları (gram altın bazlı chart hesabı için)
+const GOLD_MULTIPLIERS = {
+  CEYREK_YENI: 1.75,
+  YARIM_YENI:  3.50,
+  TEK_YENI:    7.00,
+};
 
 // GET /gold-prices — anlık altın fiyatı
 app.get('/gold-prices', (req, res) => {
+  const gramTry = goldData.gramTry;
+
+  // Sarrafiye fiyatları: Truncgil varsa onu kullan, yoksa katsayıyla hesapla
+  const getCeyrek = () => sarrafiyeData.CEYREK_YENI?.price || Number((gramTry * 1.75).toFixed(2));
+  const getYarim  = () => sarrafiyeData.YARIM_YENI?.price  || Number((gramTry * 3.50).toFixed(2));
+  const getTam    = () => sarrafiyeData.TEK_YENI?.price    || Number((gramTry * 7.00).toFixed(2));
+
   res.json({
     ALTIN: {
       symbol:    'ALTIN',
       name:      'Gram Altın',
-      price:     goldData.gramTry,
+      price:     gramTry,
       priceUsd:  goldData.xauusd,
       usdtry:    goldData.usdtry,
       change:    goldData.change,
@@ -157,25 +226,68 @@ app.get('/gold-prices', (req, res) => {
       updatedAt: goldData.updatedAt,
       sparkline: goldHistory.slice(-24).map((h) => h.price),
     },
+    CEYREK_YENI: {
+      symbol:    'CEYREK_YENI',
+      name:      'Çeyrek Altın',
+      price:     getCeyrek(),
+      change:    goldData.change,
+      high24h:   Number((goldData.high24h ? (goldData.high24h * goldData.usdtry / 31.1035) * 1.75 : 0).toFixed(2)),
+      low24h:    Number((goldData.low24h  ? (goldData.low24h  * goldData.usdtry / 31.1035) * 1.75 : 0).toFixed(2)),
+      updatedAt: goldData.updatedAt,
+      sparkline: goldHistory.slice(-24).map((h) =>
+        Number(((h.price * goldData.usdtry) / 31.1035 * 1.75).toFixed(2))
+      ),
+    },
+    YARIM_YENI: {
+      symbol:    'YARIM_YENI',
+      name:      'Yarım Altın',
+      price:     getYarim(),
+      change:    goldData.change,
+      high24h:   Number((goldData.high24h ? (goldData.high24h * goldData.usdtry / 31.1035) * 3.5 : 0).toFixed(2)),
+      low24h:    Number((goldData.low24h  ? (goldData.low24h  * goldData.usdtry / 31.1035) * 3.5 : 0).toFixed(2)),
+      updatedAt: goldData.updatedAt,
+      sparkline: goldHistory.slice(-24).map((h) =>
+        Number(((h.price * goldData.usdtry) / 31.1035 * 3.5).toFixed(2))
+      ),
+    },
+    TEK_YENI: {
+      symbol:    'TEK_YENI',
+      name:      'Tam Altın',
+      price:     getTam(),
+      change:    goldData.change,
+      high24h:   Number((goldData.high24h ? (goldData.high24h * goldData.usdtry / 31.1035) * 7 : 0).toFixed(2)),
+      low24h:    Number((goldData.low24h  ? (goldData.low24h  * goldData.usdtry / 31.1035) * 7 : 0).toFixed(2)),
+      updatedAt: goldData.updatedAt,
+      sparkline: goldHistory.slice(-24).map((h) =>
+        Number(((h.price * goldData.usdtry) / 31.1035 * 7).toFixed(2))
+      ),
+    },
   });
 });
 
 // GET /chart/gold/:symbol — altın chart verisi
 app.get('/chart/gold/:symbol', (req, res) => {
   const symbol = req.params.symbol.toUpperCase();
+  const period = req.query.period || '1D';
+
   if (goldHistory.length === 0) {
     return res.status(404).json({ error: 'Veri henüz yüklenmedi' });
   }
-  if (symbol === 'ALTIN') {
-    const data = goldHistory.map((h) => ({
-      time:  h.time,
-      price: Number(((h.price * goldData.usdtry) / 31.1035).toFixed(2)),
-    }));
-    return res.json(data);
-  }
-  // XAUUSD
-  return res.json(goldHistory);
+
+  const multiplier = GOLD_MULTIPLIERS[symbol] || 1.0;
+  const isTry = symbol !== 'XAUUSD';
+
+  const data = goldHistory.map((h) => ({
+    time:  h.time,
+    price: isTry
+      ? Number(((h.price * goldData.usdtry) / 31.1035 * multiplier).toFixed(2))
+      : Number(h.price.toFixed(2)),
+  }));
+
+  res.json(data);
 });
+
+
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Supabase — assets tablosundan metadata oku
