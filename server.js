@@ -55,25 +55,39 @@ async function fetchUsdTry() {
   }
 }
 
-// gold-api.com'dan XAUUSD çek
+// goldprice.org'dan XAUUSD çek (API key yok, ücretsiz)
 async function fetchXauUsd() {
   try {
     const response = await axios.get(
-      'https://gold-api.com/price/XAU',
-      { timeout: 10000 }
+      'https://data-asg.goldprice.org/GetData/USD-XAU/1',
+      {
+        timeout: 10000,
+        headers: {
+          'User-Agent': 'Mozilla/5.0',
+          'Referer': 'https://goldprice.org/',
+        },
+      }
     );
-    const data = response.data;
-    if (data && data.price) {
-      const xauusd = parseFloat(data.price);
-      const prevClose = parseFloat(data.prev_close_price || data.price);
+    // Response: ["1745.23,0.05,0.1"] formatında
+    const raw = response.data;
+    let xauusd = 0;
+    if (Array.isArray(raw) && raw[0]) {
+      const parts = raw[0].split(',');
+      xauusd = parseFloat(parts[0]);
+    } else if (typeof raw === 'string') {
+      const parts = raw.split(',');
+      xauusd = parseFloat(parts[0]);
+    }
+
+    if (xauusd > 0) {
+      const prevClose = goldData.xauusd > 0 ? goldData.xauusd : xauusd;
       const change = prevClose > 0 ? ((xauusd - prevClose) / prevClose) * 100 : 0;
 
       goldData.xauusd  = xauusd;
       goldData.change  = Number(change.toFixed(2));
-      goldData.high24h = parseFloat(data.high_price || xauusd);
-      goldData.low24h  = parseFloat(data.low_price  || xauusd);
+      goldData.high24h = Math.max(goldData.high24h || xauusd, xauusd);
+      goldData.low24h  = goldData.low24h > 0 ? Math.min(goldData.low24h, xauusd) : xauusd;
 
-      // Gram TL hesapla
       if (goldData.usdtry > 0) {
         goldData.gramTry = Number(((xauusd * goldData.usdtry) / 31.1035).toFixed(2));
       }
@@ -82,39 +96,60 @@ async function fetchXauUsd() {
       console.log(`Altin: $${xauusd} ONS | ${goldData.gramTry} TL/gram`);
     }
   } catch (e) {
-    console.log('gold-api.com hata:', e.message);
+    console.log('goldprice.org hata:', e.message);
+    // Fallback: Yahoo Finance XAUUSD
+    try {
+      const r = await axios.get(
+        'https://query1.finance.yahoo.com/v8/finance/chart/GC%3DF?interval=1m&range=1d',
+        { timeout: 10000 }
+      );
+      const result = r.data?.chart?.result?.[0];
+      const xauusd = result?.meta?.regularMarketPrice;
+      if (xauusd && xauusd > 0) {
+        goldData.xauusd  = xauusd;
+        goldData.high24h = result?.meta?.regularMarketDayHigh || xauusd;
+        goldData.low24h  = result?.meta?.regularMarketDayLow  || xauusd;
+        const prevClose  = result?.meta?.previousClose || xauusd;
+        goldData.change  = Number((((xauusd - prevClose) / prevClose) * 100).toFixed(2));
+        if (goldData.usdtry > 0) {
+          goldData.gramTry = Number(((xauusd * goldData.usdtry) / 31.1035).toFixed(2));
+        }
+        goldData.updatedAt = new Date().toISOString();
+        console.log(`Altin (Yahoo fallback): $${xauusd} ONS | ${goldData.gramTry} TL/gram`);
+      }
+    } catch (e2) {
+      console.log('Yahoo altin fallback hata:', e2.message);
+    }
   }
 }
 
-// Altın geçmiş veri için sparkline (son 24 saat, saatlik)
+// Altın geçmiş veri (Yahoo Finance - ücretsiz)
 let goldHistory = []; // [{time, price}]
 
 async function fetchGoldHistory() {
   try {
-    // gold-api.com geçmiş veri endpoint'i
     const response = await axios.get(
-      'https://gold-api.com/price/XAU/history',
+      'https://query1.finance.yahoo.com/v8/finance/chart/GC%3DF?interval=1d&range=1y',
       { timeout: 15000 }
     );
-    if (response.data && Array.isArray(response.data)) {
-      goldHistory = response.data
-        .map((item) => ({
-          time: new Date(item.date || item.timestamp).getTime() / 1000,
-          price: parseFloat(item.price),
-        }))
-        .filter((item) => !isNaN(item.price))
-        .sort((a, b) => a.time - b.time)
-        .slice(-30); // son 30 gün
-      console.log(`Altin gecmis: ${goldHistory.length} kayit`);
+    const result = response.data?.chart?.result?.[0];
+    if (result) {
+      const timestamps = result.timestamp || [];
+      const closes = result.indicators?.quote?.[0]?.close || [];
+      goldHistory = timestamps
+        .map((t, i) => ({ time: t, price: closes[i] }))
+        .filter((item) => item.price && !isNaN(item.price))
+        .sort((a, b) => a.time - b.time);
+      console.log(`Altin gecmis (Yahoo): ${goldHistory.length} kayit`);
     }
   } catch (e) {
     console.log('Altin gecmis hata:', e.message);
-    // Hata durumunda basit sparkline üret
+    // Hata durumunda mevcut veriyi koru, yoksa dummy üret
     if (goldHistory.length === 0 && goldData.xauusd > 0) {
       const now = Math.floor(Date.now() / 1000);
-      goldHistory = Array.from({ length: 24 }, (_, i) => ({
-        time: now - (23 - i) * 3600,
-        price: goldData.xauusd * (1 + (Math.random() - 0.5) * 0.01),
+      goldHistory = Array.from({ length: 30 }, (_, i) => ({
+        time: now - (29 - i) * 86400,
+        price: goldData.xauusd * (0.97 + Math.random() * 0.06),
       }));
     }
   }
