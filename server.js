@@ -62,75 +62,67 @@ async function fetchUsdTry() {
   }
 }
 
-// goldpricez.com'dan XAGUSD (gümüş) çek
-async function fetchXagUsd() {
-  try {
-    const response = await axios.get(
-      'https://goldpricez.com/api/rates/currency/usd/measure/ounce/metal/silver',
-      {
-        timeout: 10000,
-        headers: { 'X-API-KEY': GOLD_API_KEY },
-      }
-    );
-    let data = response.data;
-    if (typeof data === 'string') {
-      try { data = JSON.parse(data); } catch(_) {}
-    }
-    const xagusd = parseFloat(String(data.ounce_price_usd || data.ounce_in_usd || data.price || '0').replace(/,/g, ''));
-    if (xagusd > 0) {
-      const prevClose = goldData.xagusd > 0 ? goldData.xagusd : xagusd;
-      const change = prevClose > 0 ? ((xagusd - prevClose) / prevClose) * 100 : 0;
-
-      goldData.xagusd         = xagusd;
-      goldData.silverChange   = Number(change.toFixed(2));
-      goldData.silverHigh24h  = Math.max(goldData.silverHigh24h || xagusd, xagusd);
-      goldData.silverLow24h   = goldData.silverLow24h > 0 ? Math.min(goldData.silverLow24h, xagusd) : xagusd;
-
-      if (goldData.usdtry > 0) {
-        goldData.gramSilverTry = Number(((xagusd * goldData.usdtry) / 31.1035).toFixed(2));
-      }
-      console.log(`Gumus: $${xagusd} ONS | ${goldData.gramSilverTry} TL/gram`);
-    }
-  } catch (e) {
-    console.log('goldpricez.com gumus hata:', e.message);
-  }
-}
-
-// goldpricez.com'dan XAUUSD çek
+// goldpricez.com'dan altin + gumus cek (tek endpoint)
 async function fetchXauUsd() {
   try {
     const response = await axios.get(
-      'https://goldpricez.com/api/rates/currency/usd/measure/ounce',
+      'https://goldpricez.com/api/rates/currency/usd/measure/all',
       {
         timeout: 10000,
         headers: { 'X-API-KEY': GOLD_API_KEY },
       }
     );
-    // Response string veya object gelebilir
     let data = response.data;
     if (typeof data === 'string') {
       try { data = JSON.parse(data); } catch(_) {}
     }
-    const xauusd = parseFloat(String(data.ounce_price_usd || data.ounce_in_usd || data.price || data.XAU || '0').replace(/,/g, ''));
+
+    // Ilk calistirmada field'lari logla
+    if (goldData.xauusd === 0) {
+      console.log('goldpricez all fields:', Object.keys(data).join(', '));
+      console.log('goldpricez sample:', JSON.stringify(data).slice(0, 500));
+    }
+
+    // Altin
+    const xauusd = parseFloat(String(
+      data.ounce_price_usd || data.ounce_in_usd || data.gold_ounce_price_usd || data.price || '0'
+    ).replace(/,/g, ''));
 
     if (xauusd > 0) {
       const prevClose = goldData.xauusd > 0 ? goldData.xauusd : xauusd;
       const change = prevClose > 0 ? ((xauusd - prevClose) / prevClose) * 100 : 0;
-
       goldData.xauusd  = xauusd;
       goldData.change  = Number(change.toFixed(2));
       goldData.high24h = Math.max(goldData.high24h || xauusd, xauusd);
       goldData.low24h  = goldData.low24h > 0 ? Math.min(goldData.low24h, xauusd) : xauusd;
-
       if (goldData.usdtry > 0) {
         goldData.gramTry = Number(((xauusd * goldData.usdtry) / 31.1035).toFixed(2));
       }
-
       goldData.updatedAt = new Date().toISOString();
-      console.log(`Altin: $${xauusd} ONS | ${goldData.gramTry} TL/gram`);
-    } else {
-      console.log('goldpricez.com: fiyat parse edilemedi', JSON.stringify(data).slice(0, 200));
+      console.log('Altin: $' + xauusd + ' ONS | ' + goldData.gramTry + ' TL/gram');
     }
+
+    // Gumus - silver iceren field'i bul
+    const silverKey = Object.keys(data).find(k =>
+      k.toLowerCase().includes('silver') || k.toLowerCase().includes('xag')
+    );
+    if (silverKey) {
+      const xagusd = parseFloat(String(data[silverKey]).replace(/,/g, ''));
+      if (xagusd > 0 && xagusd < 500) {
+        const prevSilver = goldData.xagusd > 0 ? goldData.xagusd : xagusd;
+        goldData.xagusd        = xagusd;
+        goldData.silverChange  = Number((((xagusd - prevSilver) / prevSilver) * 100).toFixed(2));
+        goldData.silverHigh24h = Math.max(goldData.silverHigh24h || xagusd, xagusd);
+        goldData.silverLow24h  = goldData.silverLow24h > 0 ? Math.min(goldData.silverLow24h, xagusd) : xagusd;
+        if (goldData.usdtry > 0) {
+          goldData.gramSilverTry = Number(((xagusd * goldData.usdtry) / 31.1035).toFixed(4));
+        }
+        console.log('Gumus: $' + xagusd + ' ONS | ' + goldData.gramSilverTry + ' TL/gram');
+      }
+    } else {
+      console.log('Gumus field bulunamadi');
+    }
+
   } catch (e) {
     console.log('goldpricez.com hata:', e.message);
   }
@@ -247,11 +239,10 @@ async function fetchSarrafiye() {
   }
 }
 
-// Tüm altın/gümüş verilerini güncelle
+// Tum altin/gumus verilerini guncelle
 async function updateGoldData() {
   await fetchUsdTry();
   await fetchXauUsd();
-  await fetchXagUsd();
   await fetchSarrafiye();
 }
 
