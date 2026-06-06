@@ -32,6 +32,12 @@ let goldData = {
   high24h: 0,
   low24h: 0,
   updatedAt: null,
+  // Gümüş
+  xagusd: 0,       // ons gümüş USD
+  gramSilverTry: 0, // gram gümüş TL
+  silverChange: 0,
+  silverHigh24h: 0,
+  silverLow24h: 0,
 };
 
 // TCMB'den USD/TRY kuru çek
@@ -53,6 +59,40 @@ async function fetchUsdTry() {
     }
   } catch (e) {
     console.log('TCMB USDTRY hata:', e.message);
+  }
+}
+
+// goldpricez.com'dan XAGUSD (gümüş) çek
+async function fetchXagUsd() {
+  try {
+    const response = await axios.get(
+      'https://goldpricez.com/api/rates/currency/usd/measure/ounce/metal/silver',
+      {
+        timeout: 10000,
+        headers: { 'X-API-KEY': GOLD_API_KEY },
+      }
+    );
+    let data = response.data;
+    if (typeof data === 'string') {
+      try { data = JSON.parse(data); } catch(_) {}
+    }
+    const xagusd = parseFloat(String(data.ounce_price_usd || data.ounce_in_usd || data.price || '0').replace(/,/g, ''));
+    if (xagusd > 0) {
+      const prevClose = goldData.xagusd > 0 ? goldData.xagusd : xagusd;
+      const change = prevClose > 0 ? ((xagusd - prevClose) / prevClose) * 100 : 0;
+
+      goldData.xagusd         = xagusd;
+      goldData.silverChange   = Number(change.toFixed(2));
+      goldData.silverHigh24h  = Math.max(goldData.silverHigh24h || xagusd, xagusd);
+      goldData.silverLow24h   = goldData.silverLow24h > 0 ? Math.min(goldData.silverLow24h, xagusd) : xagusd;
+
+      if (goldData.usdtry > 0) {
+        goldData.gramSilverTry = Number(((xagusd * goldData.usdtry) / 31.1035).toFixed(2));
+      }
+      console.log(`Gumus: $${xagusd} ONS | ${goldData.gramSilverTry} TL/gram`);
+    }
+  } catch (e) {
+    console.log('goldpricez.com gumus hata:', e.message);
   }
 }
 
@@ -145,44 +185,73 @@ async function fetchSarrafiye() {
       CEYREK_YENI: {
         symbol: 'CEYREK_YENI',
         name:   'Çeyrek Altın',
-        price:  parsePrice(data['Çeyrek Altın']?.Satış),
-        bid:    parsePrice(data['Çeyrek Altın']?.Alış),
+        price:  parsePrice(data['ceyrek-altin']?.Satış),
+        bid:    parsePrice(data['ceyrek-altin']?.Alış),
         change: 0,
       },
       YARIM_YENI: {
         symbol: 'YARIM_YENI',
         name:   'Yarım Altın',
-        price:  parsePrice(data['Yarım Altın']?.Satış),
-        bid:    parsePrice(data['Yarım Altın']?.Alış),
+        price:  parsePrice(data['yarim-altin']?.Satış),
+        bid:    parsePrice(data['yarim-altin']?.Alış),
         change: 0,
       },
       TEK_YENI: {
         symbol: 'TEK_YENI',
         name:   'Tam Altın',
-        price:  parsePrice(data['Tam Altın']?.Satış),
-        bid:    parsePrice(data['Tam Altın']?.Alış),
+        price:  parsePrice(data['tam-altin']?.Satış),
+        bid:    parsePrice(data['tam-altin']?.Alış),
         change: 0,
       },
       XAUUSD_TR: {
         symbol: 'XAUUSD',
         name:   'Ons Altın',
-        price:  parsePrice(data['Ons']?.Satış),
-        bid:    parsePrice(data['Ons']?.Alış),
+        price:  parsePrice(data['ons']?.Satış),
+        bid:    parsePrice(data['ons']?.Alış),
+        change: 0,
+      },
+      CUM_ALTIN: {
+        symbol: 'CUM_ALTIN',
+        name:   'Cumhuriyet Altını',
+        price:  parsePrice(data['cumhuriyet-altini']?.Satış),
+        bid:    parsePrice(data['cumhuriyet-altini']?.Alış),
+        change: 0,
+      },
+      ATA_ALTIN: {
+        symbol: 'ATA_ALTIN',
+        name:   'Ata Altın',
+        price:  parsePrice(data['ata-altin']?.Satış),
+        bid:    parsePrice(data['ata-altin']?.Alış),
+        change: 0,
+      },
+      RESAT_ALTIN: {
+        symbol: 'RESAT_ALTIN',
+        name:   'Reşat Altın',
+        price:  parsePrice(data['resat-altin']?.Satış),
+        bid:    parsePrice(data['resat-altin']?.Alış),
+        change: 0,
+      },
+      GUMUS: {
+        symbol: 'GUMUS',
+        name:   'Gram Gümüş',
+        price:  parsePrice(data['gumus']?.Satış),
+        bid:    parsePrice(data['gumus']?.Alış),
         change: 0,
       },
     };
 
     console.log(`Sarrafiye yuklendi: Ceyrek=${sarrafiyeData.CEYREK_YENI.price} TEK=${sarrafiyeData.TEK_YENI.price}`);
-    console.log('Truncgil keys:', Object.keys(data).join(', '));
+    
   } catch (e) {
     console.log('Truncgil sarrafiye hata:', e.message);
   }
 }
 
-// Tüm altın verilerini güncelle
+// Tüm altın/gümüş verilerini güncelle
 async function updateGoldData() {
   await fetchUsdTry();
   await fetchXauUsd();
+  await fetchXagUsd();
   await fetchSarrafiye();
 }
 
@@ -191,6 +260,9 @@ const GOLD_MULTIPLIERS = {
   CEYREK_YENI: 1.75,
   YARIM_YENI:  3.50,
   TEK_YENI:    7.00,
+  CUM_ALTIN:   7.20,
+  ATA_ALTIN:   7.20,
+  RESAT_ALTIN: 7.20,
 };
 
 // GET /gold-prices — anlık altın fiyatı
@@ -263,6 +335,53 @@ app.get('/gold-prices', (req, res) => {
         Number(((h.price * goldData.usdtry) / 31.1035 * 7).toFixed(2))
       ),
     },
+    CUM_ALTIN: {
+      symbol:    'CUM_ALTIN',
+      name:      'Cumhuriyet Altını',
+      price:     sarrafiyeData.CUM_ALTIN?.price || Number((gramTry * 7.2).toFixed(2)),
+      change:    goldData.change,
+      high24h:   0,
+      low24h:    0,
+      updatedAt: goldData.updatedAt,
+      sparkline: goldHistory.slice(-24).map((h) =>
+        Number(((h.price * goldData.usdtry) / 31.1035 * 7.2).toFixed(2))
+      ),
+    },
+    ATA_ALTIN: {
+      symbol:    'ATA_ALTIN',
+      name:      'Ata Altın',
+      price:     sarrafiyeData.ATA_ALTIN?.price || Number((gramTry * 7.2).toFixed(2)),
+      change:    goldData.change,
+      high24h:   0,
+      low24h:    0,
+      updatedAt: goldData.updatedAt,
+      sparkline: goldHistory.slice(-24).map((h) =>
+        Number(((h.price * goldData.usdtry) / 31.1035 * 7.2).toFixed(2))
+      ),
+    },
+    RESAT_ALTIN: {
+      symbol:    'RESAT_ALTIN',
+      name:      'Reşat Altın',
+      price:     sarrafiyeData.RESAT_ALTIN?.price || Number((gramTry * 7.2).toFixed(2)),
+      change:    goldData.change,
+      high24h:   0,
+      low24h:    0,
+      updatedAt: goldData.updatedAt,
+      sparkline: goldHistory.slice(-24).map((h) =>
+        Number(((h.price * goldData.usdtry) / 31.1035 * 7.2).toFixed(2))
+      ),
+    },
+    GUMUS: {
+      symbol:    'GUMUS',
+      name:      'Gram Gümüş',
+      price:     goldData.gramSilverTry,
+      priceUsd:  goldData.xagusd,
+      change:    goldData.silverChange,
+      high24h:   goldData.silverHigh24h ? Number(((goldData.silverHigh24h * goldData.usdtry) / 31.1035).toFixed(2)) : 0,
+      low24h:    goldData.silverLow24h  ? Number(((goldData.silverLow24h  * goldData.usdtry) / 31.1035).toFixed(2)) : 0,
+      updatedAt: goldData.updatedAt,
+      sparkline: [],
+    },
   });
 });
 
@@ -273,6 +392,22 @@ app.get('/chart/gold/:symbol', (req, res) => {
 
   if (goldHistory.length === 0) {
     return res.status(404).json({ error: 'Veri henüz yüklenmedi' });
+  }
+
+  // Gümüş chart — xagusd ile hesapla
+  if (symbol === 'GUMUS') {
+    if (goldData.xagusd === 0 || goldData.usdtry === 0) {
+      return res.status(404).json({ error: 'Gümüş verisi henüz yüklenmedi' });
+    }
+    // Gümüş için goldHistory yok, sabit ratio kullan
+    const silverGoldRatio = goldData.xagusd > 0 && goldData.xauusd > 0
+      ? goldData.xagusd / goldData.xauusd
+      : 0.013;
+    const data = goldHistory.map((h) => ({
+      time:  h.time,
+      price: Number(((h.price * silverGoldRatio * goldData.usdtry) / 31.1035).toFixed(4)),
+    }));
+    return res.json(data);
   }
 
   const multiplier = GOLD_MULTIPLIERS[symbol] || 1.0;
