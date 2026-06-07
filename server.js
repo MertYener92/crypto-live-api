@@ -33,14 +33,18 @@ let goldData = {
   low24h: 0,
   updatedAt: null,
   // Gümüş
-  xagusd: 0,       // ons gümüş USD
-  gramSilverTry: 0, // gram gümüş TL
+  xagusd: 0,
+  gramSilverTry: 0,
   silverChange: 0,
   silverHigh24h: 0,
   silverLow24h: 0,
+  // TL bazlı high/low
+  high24hTry: 0,
+  low24hTry: 0,
 };
 
 // TCMB'den USD/TRY kuru çek
+// TCMB'den USD/TRY kuru çek (fallback)
 async function fetchUsdTry() {
   try {
     const response = await axios.get(
@@ -62,63 +66,106 @@ async function fetchUsdTry() {
   }
 }
 
-// goldpricez.com'dan altin + gumus cek (tek endpoint)
+// canlidoviz.com'dan tüm altın + gümüş verisi çek (ücretsiz, anlık, kapalıçarşı bazlı)
 async function fetchXauUsd() {
   try {
     const response = await axios.get(
-      'https://goldpricez.com/api/rates/currency/usd/measure/all',
-      {
-        timeout: 10000,
-        headers: { 'X-API-KEY': GOLD_API_KEY },
-      }
+      'https://api.canlidoviz.com/web/items?marketId=1&type=1',
+      { timeout: 10000 }
     );
-    let data = response.data;
-    if (typeof data === 'string') {
-      try { data = JSON.parse(data); } catch(_) {}
+    const items = response.data;
+
+    if (!Array.isArray(items) || items.length === 0) {
+      console.log('canlidoviz: veri bos');
+      return;
     }
 
-    // Altin
-    const xauusd = parseFloat(String(
-      data.ounce_price_usd || data.ounce_in_usd || data.gold_ounce_price_usd || data.price || '0'
-    ).replace(/,/g, ''));
-
-    if (xauusd > 0) {
-      const prevClose = goldData.xauusd > 0 ? goldData.xauusd : xauusd;
-      const change = prevClose > 0 ? ((xauusd - prevClose) / prevClose) * 100 : 0;
-      goldData.xauusd  = xauusd;
-      goldData.change  = Number(change.toFixed(2));
-      goldData.high24h = Math.max(goldData.high24h || xauusd, xauusd);
-      goldData.low24h  = goldData.low24h > 0 ? Math.min(goldData.low24h, xauusd) : xauusd;
-      if (goldData.usdtry > 0) {
-        goldData.gramTry = Number(((xauusd * goldData.usdtry) / 31.1035).toFixed(2));
-      }
-      goldData.updatedAt = new Date().toISOString();
-      console.log('Altin: $' + xauusd + ' ONS | ' + goldData.gramTry + ' TL/gram');
+    // İlk çalışmada item listesini logla
+    if (goldData.xauusd === 0) {
+      console.log('canlidoviz items:', items.map(i => i.code || i.name || i.symbol).join(', '));
     }
 
-    // Gumus - silver iceren field'i bul
-    const silverKey = Object.keys(data).find(k =>
-      k.toLowerCase().includes('silver') || k.toLowerCase().includes('xag')
-    );
-    if (silverKey) {
-      const xagusd = parseFloat(String(data[silverKey]).replace(/,/g, ''));
-      if (xagusd > 0 && xagusd < 500) {
-        const prevSilver = goldData.xagusd > 0 ? goldData.xagusd : xagusd;
-        goldData.xagusd        = xagusd;
-        goldData.silverChange  = Number((((xagusd - prevSilver) / prevSilver) * 100).toFixed(2));
-        goldData.silverHigh24h = Math.max(goldData.silverHigh24h || xagusd, xagusd);
-        goldData.silverLow24h  = goldData.silverLow24h > 0 ? Math.min(goldData.silverLow24h, xagusd) : xagusd;
+    const parsePrice = (val) => {
+      if (!val) return 0;
+      return parseFloat(String(val).replace(/\./g, '').replace(',', '.')) || 0;
+    };
+
+    // Her item'ı işle
+    items.forEach(item => {
+      const code = (item.code || item.symbol || item.name || '').toUpperCase();
+      const sell = parsePrice(item.sell || item.satis || item.ask);
+      const buy  = parsePrice(item.buy  || item.alis  || item.bid);
+      const price = sell > 0 ? sell : buy;
+      if (price <= 0) return;
+
+      // Gram altın
+      if (code.includes('GRAM') || code === 'GA' || code === 'GRAM_ALTIN' || code === 'GRAMALTIN') {
+        const prev = goldData.gramTry > 0 ? goldData.gramTry : price;
+        goldData.gramTry = price;
+        goldData.change  = Number((((price - prev) / prev) * 100).toFixed(2));
+        goldData.high24h = Math.max(goldData.high24hTry || price, price);
+        goldData.low24h  = goldData.low24hTry > 0 ? Math.min(goldData.low24hTry, price) : price;
+        goldData.high24hTry = goldData.high24h;
+        goldData.low24hTry  = goldData.low24h;
+        goldData.updatedAt  = new Date().toISOString();
+        // USD karşılığını hesapla
         if (goldData.usdtry > 0) {
-          goldData.gramSilverTry = Number(((xagusd * goldData.usdtry) / 31.1035).toFixed(4));
+          goldData.xauusd = Number(((price * 31.1035) / goldData.usdtry).toFixed(2));
         }
-        console.log('Gumus: $' + xagusd + ' ONS | ' + goldData.gramSilverTry + ' TL/gram');
+        console.log(`Altin (canlidoviz): ${price} TL/gram`);
       }
-    } else {
-      console.log('Gumus field bulunamadi');
-    }
+
+      // Gümüş
+      if (code.includes('GUMUS') || code.includes('SILVER') || code === 'AG') {
+        const prev = goldData.gramSilverTry > 0 ? goldData.gramSilverTry : price;
+        goldData.gramSilverTry = price;
+        goldData.silverChange  = Number((((price - prev) / prev) * 100).toFixed(2));
+        console.log(`Gumus (canlidoviz): ${price} TL/gram`);
+      }
+
+      // Sarrafiye
+      const sarrafiyeMap = {
+        'CEYREK': 'CEYREK_YENI', 'CA': 'CEYREK_YENI',
+        'YARIM':  'YARIM_YENI',  'YA': 'YARIM_YENI',
+        'TAM':    'TEK_YENI',    'TA': 'TEK_YENI',
+        'CUM':    'CUM_ALTIN',   'CA2': 'CUM_ALTIN',
+        'ATA':    'ATA_ALTIN',
+        'RESAT':  'RESAT_ALTIN',
+      };
+
+      Object.keys(sarrafiyeMap).forEach(key => {
+        if (code.includes(key)) {
+          const symbol = sarrafiyeMap[key];
+          sarrafiyeData[symbol] = {
+            ...sarrafiyeData[symbol],
+            symbol,
+            price: sell > 0 ? sell : price,
+            bid: buy,
+          };
+        }
+      });
+    });
 
   } catch (e) {
-    console.log('goldpricez.com hata:', e.message);
+    console.log('canlidoviz hata:', e.message, '— goldpricez fallback...');
+    // Fallback: goldpricez.com
+    try {
+      const response = await axios.get(
+        'https://goldpricez.com/api/rates/currency/usd/measure/all',
+        { timeout: 10000, headers: { 'X-API-KEY': GOLD_API_KEY } }
+      );
+      let data = response.data;
+      if (typeof data === 'string') { try { data = JSON.parse(data); } catch(_) {} }
+      const xauusd = parseFloat(String(data.ounce_price_usd || '0').replace(/,/g, ''));
+      if (xauusd > 0 && goldData.usdtry > 0) {
+        goldData.xauusd  = xauusd;
+        goldData.gramTry = Number(((xauusd * goldData.usdtry) / 31.1035).toFixed(2));
+        goldData.updatedAt = new Date().toISOString();
+        console.log('Altin (goldpricez fallback): $' + xauusd + ' | ' + goldData.gramTry + ' TL/gram');
+      }
+    } catch (e2) {
+      console.log('goldpricez fallback hata:', e2.message);
+    }
   }
 }
 
@@ -327,7 +374,6 @@ async function fetchSarrafiye() {
 async function updateGoldData() {
   await fetchUsdTry();
   await fetchXauUsd();
-  await fetchSarrafiye();
 }
 
 // Sarrafiye katsayıları (gram altın bazlı chart hesabı için)
@@ -357,22 +403,24 @@ app.get('/gold-prices', (req, res) => {
       priceUsd:  goldData.xauusd,
       usdtry:    goldData.usdtry,
       change:    goldData.change,
-      high24h:   goldData.high24h ? Number(((goldData.high24h * goldData.usdtry) / 31.1035).toFixed(2)) : 0,
-      low24h:    goldData.low24h  ? Number(((goldData.low24h  * goldData.usdtry) / 31.1035).toFixed(2)) : 0,
+      high24h:   goldData.high24hTry || gramTry,
+      low24h:    goldData.low24hTry  || gramTry,
       updatedAt: goldData.updatedAt,
-      sparkline: goldIntraday.slice(-24).map((h) =>
-        Number(((h.price * goldData.usdtry) / 31.1035).toFixed(2))
-      ),
+      sparkline: goldIntraday.slice(-24).map(h => h.price || gramTry),
     },
     XAUUSD: {
       symbol:    'XAUUSD',
       name:      'Ons Altın',
       price:     goldData.xauusd,
       change:    goldData.change,
-      high24h:   goldData.high24h,
-      low24h:    goldData.low24h,
+      high24h:   goldData.xauusd,
+      low24h:    goldData.xauusd,
       updatedAt: goldData.updatedAt,
-      sparkline: goldIntraday.slice(-24).map((h) => h.price),
+      sparkline: goldIntraday.slice(-24).map(h =>
+        h.price && goldData.usdtry > 0
+          ? Number(((h.price * 31.1035) / goldData.usdtry).toFixed(2))
+          : goldData.xauusd
+      ),
     },
     CEYREK_YENI: {
       symbol:    'CEYREK_YENI',
