@@ -66,6 +66,9 @@ async function fetchUsdTry() {
   }
 }
 
+// Sarrafiye verisi
+let sarrafiyeData = {};
+
 // Truncgil v3'ten tüm altın + gümüş verisi çek (dakika bazlı güncelleniyor)
 async function fetchXauUsd() {
   try {
