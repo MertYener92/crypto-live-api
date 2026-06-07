@@ -268,13 +268,6 @@ function getGoldHistory(period) {
   return goldHistoryCache[period] || [];
 }
 
-    console.log(`Sarrafiye yuklendi: Ceyrek=${sarrafiyeData.CEYREK_YENI.price} TEK=${sarrafiyeData.TEK_YENI.price} Gumus=${sarrafiyeData.GUMUS.price}`);
-
-    
-  } catch (e) {
-    console.log('Truncgil sarrafiye hata:', e.message);
-  }
-}
 
 // Tum altin/gumus verilerini guncelle (Truncgil v3 tek kaynak)
 async function updateGoldData() {
