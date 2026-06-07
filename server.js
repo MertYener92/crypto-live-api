@@ -1225,22 +1225,23 @@ app.get('/fund/chart/:code', async (req, res) => {
 app.get('/fund/allocation/:code', async (req, res) => {
   try {
     const code = req.params.code.toUpperCase();
-    const data = await fetchTefas('fonProfilDtyGetir', { fonKodu: code, dil: 'TR' });
+    const data = await fetchTefas('fonProfilDtyGetir', { fonKodu: code, dil: 'TR', periyod: '12' });
     if (!data || data.faultCode) return res.status(404).json({ error: 'Dağılım yok', raw: data });
 
     console.log(`TEFAS allocation ${code}:`, JSON.stringify(data).slice(0, 300));
 
     // Dağılım verisi
-    const items = data?.data || data?.dagilim || data?.dagitim || (Array.isArray(data) ? data : []);
+    const items = data?.resultList || data?.data || data?.dagilim || (Array.isArray(data) ? data : []);
     const allocation = [];
     
     if (items.length > 0) {
       const latest = items[items.length - 1];
-      const skipKeys = ['TARIH', 'tarih', 'date', 'FONKODU', 'fonKodu', 'FONUNVAN'];
+      const skipKeys = ['tarih', 'TARIH', 'date', 'fonKodu', 'FONKODU', 'fonUnvan', 'FONUNVAN',
+                        'kategoriDerece', 'kategoriFonSay', 'errorCode', 'errorMessage'];
       Object.entries(latest).forEach(([key, val]) => {
         if (skipKeys.includes(key)) return;
         const v = parseFloat(String(val || 0).replace(',', '.'));
-        if (v > 0) allocation.push({ key, label: key, value: v });
+        if (v > 0.001) allocation.push({ key, label: key, value: Number(v.toFixed(4)) });
       });
       allocation.sort((a, b) => b.value - a.value);
     }
