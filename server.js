@@ -894,9 +894,21 @@ async function fetchCandles(symbol, startMs, endMs, granularity) {
   return allCandles;
 }
 
+// Altın sembolleri — Coinbase'de yok
+const GOLD_SYMBOLS = new Set([
+  'ALTIN','XAUUSD','CEYREK_YENI','YARIM_YENI','TEK_YENI',
+  'CUM_ALTIN','ATA_ALTIN','RESAT_ALTIN','GUMUS'
+]);
+
 app.get('/chart/:symbol', async (req, res) => {
   try {
     const symbol  = req.params.symbol.toUpperCase();
+
+    // Altın sembolü ise /chart/gold/ endpoint'ini kullan
+    if (GOLD_SYMBOLS.has(symbol)) {
+      return res.redirect(`/chart/gold/${symbol}?${new URLSearchParams(req.query).toString()}`);
+    }
+
     const period  = req.query.period || '1D';
     const config  = getChartConfig(period);
     const endMs   = Date.now();
