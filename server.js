@@ -126,6 +126,8 @@ async function fetchXauUsd() {
       'cumhuriyet-altini': 'CUM_ALTIN',
       'ata-altin':         'ATA_ALTIN',
       'resat-altin':       'RESAT_ALTIN',
+      'gram-platin':       'PLATIN',
+      'gram-paladyum':     'PALADYUM',
     };
 
     Object.entries(sarrafiyeKeys).forEach(([key, symbol]) => {
@@ -165,9 +167,11 @@ async function fetchXauUsd() {
 // Altın geçmiş veri cache — periyot bazlı
 // { '1D': [{time, price}], '1M': [...], ... }
 const goldHistoryCache = {};
-const silverHistoryCache = {}; // Gümüş geçmiş veri
-let goldIntraday = []; // 1D için 5dk'lık birikmiş veri
-let silverIntraday = []; // Gümüş 1D intraday
+const silverHistoryCache = {};
+const platinHistoryCache = {};
+const paladyumHistoryCache = {};
+let goldIntraday = [];
+let silverIntraday = [];
 
 // Yahoo Finance'den altın + USDTRY geçmiş veri çek
 async function fetchYahooData(symbol, range, interval) {
@@ -243,7 +247,6 @@ async function fetchGoldHistory() {
       await new Promise(r => setTimeout(r, 1000));
 
       if (silverRaw.length > 0) {
-        // Gümüşü TL'ye çevir (her noktanın kendi USDTRY'si ile)
         const silverMerged = mergeByTime(silverRaw, usdtryData).map(h => ({
           time:  h.time,
           price: Number(((h.priceUsd || h.price) * (h.usdtry || goldData.usdtry) / 31.1035).toFixed(4)),
@@ -251,6 +254,34 @@ async function fetchGoldHistory() {
         silverHistoryCache[cfg.period] = silverMerged;
         console.log(`Gumus gecmis ${cfg.period}: ${silverMerged.length} kayit`);
       }
+
+      // Platin (PL=F)
+      try {
+        const platinRaw = await fetchYahooData('PL=F', cfg.range, cfg.interval);
+        await new Promise(r => setTimeout(r, 1000));
+        if (platinRaw.length > 0) {
+          const platinMerged = mergeByTime(platinRaw, usdtryData).map(h => ({
+            time:  h.time,
+            price: Number(((h.priceUsd || h.price) * (h.usdtry || goldData.usdtry) / 31.1035).toFixed(2)),
+          }));
+          platinHistoryCache[cfg.period] = platinMerged;
+          console.log(`Platin gecmis ${cfg.period}: ${platinMerged.length} kayit`);
+        }
+      } catch(e) { console.log(`Platin gecmis ${cfg.period} hata:`, e.message); }
+
+      // Paladyum (PA=F)
+      try {
+        const paladyumRaw = await fetchYahooData('PA=F', cfg.range, cfg.interval);
+        await new Promise(r => setTimeout(r, 1000));
+        if (paladyumRaw.length > 0) {
+          const paladyumMerged = mergeByTime(paladyumRaw, usdtryData).map(h => ({
+            time:  h.time,
+            price: Number(((h.priceUsd || h.price) * (h.usdtry || goldData.usdtry) / 31.1035).toFixed(2)),
+          }));
+          paladyumHistoryCache[cfg.period] = paladyumMerged;
+          console.log(`Paladyum gecmis ${cfg.period}: ${paladyumMerged.length} kayit`);
+        }
+      } catch(e) { console.log(`Paladyum gecmis ${cfg.period} hata:`, e.message); }
     } catch (e) {
       console.log(`Gecmis veri ${cfg.period} hata:`, e.message);
     }
@@ -425,6 +456,26 @@ app.get('/gold-prices', (req, res) => {
         return Number(((h.price * goldData.usdtry) / 31.1035 * ratio).toFixed(4));
       }),
     },
+    PLATIN: {
+      symbol:    'PLATIN',
+      name:      'Gram Platin',
+      price:     sarrafiyeData.PLATIN?.price || 0,
+      change:    sarrafiyeData.PLATIN?.change || 0,
+      high24h:   0,
+      low24h:    0,
+      updatedAt: goldData.updatedAt,
+      sparkline: [],
+    },
+    PALADYUM: {
+      symbol:    'PALADYUM',
+      name:      'Gram Paladyum',
+      price:     sarrafiyeData.PALADYUM?.price || 0,
+      change:    sarrafiyeData.PALADYUM?.change || 0,
+      high24h:   0,
+      low24h:    0,
+      updatedAt: goldData.updatedAt,
+      sparkline: [],
+    },
   });
 });
 
@@ -451,6 +502,36 @@ app.get('/chart/gold/:symbol', (req, res) => {
 
   const multiplier = GOLD_MULTIPLIERS[symbol] || 1.0;
   const isTry = symbol !== 'XAUUSD';
+
+  // Platin chart
+  if (symbol === 'PLATIN') {
+    const history = platinHistoryCache[backendPeriod] || [];
+    if (history.length === 0) {
+      const now = Math.floor(Date.now() / 1000);
+      const price = sarrafiyeData.PLATIN?.price || 0;
+      return res.json(price > 0 ? [{ time: now - 3600, price }, { time: now, price }] : []);
+    }
+    const data = [...history];
+    if (data.length > 0 && sarrafiyeData.PLATIN?.price > 0) {
+      data[data.length - 1] = { time: Math.floor(Date.now() / 1000), price: sarrafiyeData.PLATIN.price };
+    }
+    return res.json(data);
+  }
+
+  // Paladyum chart
+  if (symbol === 'PALADYUM') {
+    const history = paladyumHistoryCache[backendPeriod] || [];
+    if (history.length === 0) {
+      const now = Math.floor(Date.now() / 1000);
+      const price = sarrafiyeData.PALADYUM?.price || 0;
+      return res.json(price > 0 ? [{ time: now - 3600, price }, { time: now, price }] : []);
+    }
+    const data = [...history];
+    if (data.length > 0 && sarrafiyeData.PALADYUM?.price > 0) {
+      data[data.length - 1] = { time: Math.floor(Date.now() / 1000), price: sarrafiyeData.PALADYUM.price };
+    }
+    return res.json(data);
+  }
 
   // Gümüş chart — silverHistoryCache kullan
   if (symbol === 'GUMUS') {
