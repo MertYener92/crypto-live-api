@@ -1221,32 +1221,47 @@ app.get('/fund/chart/:code', async (req, res) => {
   }
 });
 
-// GET /fund/allocation/:code — Portföy dağılımı
-app.get('/fund/allocation/:code', async (req, res) => {
+// GET /fund/comparison/:code?periyod=12 — Fon vs rakipler getiri karşılaştırması
+app.get('/fund/comparison/:code', async (req, res) => {
   try {
-    const code = req.params.code.toUpperCase();
-    const data = await fetchTefas('fonProfilDtyGetir', { fonKodu: code, dil: 'TR', periyod: '12' });
-    if (!data || data.faultCode) return res.status(404).json({ error: 'Dağılım yok', raw: data });
+    const code    = req.params.code.toUpperCase();
+    const periyod = req.query.periyod || '12';
+    const data    = await fetchTefas('fonProfilDtyGetir', { fonKodu: code, dil: 'TR', periyod });
+    if (!data || data.faultCode) return res.status(404).json({ error: 'Veri yok', raw: data });
 
-    console.log(`TEFAS allocation ${code}:`, JSON.stringify(data).slice(0, 300));
+    const items = data?.resultList || [];
 
-    // Dağılım verisi
-    const items = data?.resultList || data?.data || data?.dagilim || (Array.isArray(data) ? data : []);
-    const allocation = [];
-    
-    if (items.length > 0) {
-      const latest = items[items.length - 1];
-      const skipKeys = ['tarih', 'TARIH', 'date', 'fonKodu', 'FONKODU', 'fonUnvan', 'FONUNVAN',
-                        'kategoriDerece', 'kategoriFonSay', 'errorCode', 'errorMessage'];
-      Object.entries(latest).forEach(([key, val]) => {
-        if (skipKeys.includes(key)) return;
-        const v = parseFloat(String(val || 0).replace(',', '.'));
-        if (v > 0.001) allocation.push({ key, label: key, value: Number(v.toFixed(4)) });
-      });
-      allocation.sort((a, b) => b.value - a.value);
-    }
+    // Fonun kendi verisi
+    const fund = items.find(i => i.fonKodu === code);
 
-    res.json({ code, allocation, raw: data });
+    // Karşılaştırma araçları (BIST100, Altın, USD, TÜFE, Mevduat)
+    const labelMap = {
+      'BIST100':       'BIST 100',
+      'BIST30':        'BIST 30',
+      'ALTIN':         'Altın',
+      'USD':           'USD/TL',
+      'EUR':           'EUR/TL',
+      'TUFE':          'TÜFE',
+      'MEVDUAT FAIZI': 'Mevduat',
+    };
+
+    const benchmarks = items
+      .filter(i => i.fonKodu !== code)
+      .map(i => ({
+        code:   i.fonKodu,
+        name:   labelMap[i.fonKodu] || i.fonUnvan || i.fonKodu,
+        return: Number((i.fonTurGetiri * 100).toFixed(2)),
+      }))
+      .sort((a, b) => b.return - a.return);
+
+    res.json({
+      code,
+      name:       fund?.fonUnvan || code,
+      fundType:   fund?.fonTuru  || '',
+      fundReturn: fund ? Number((fund.fonTurGetiri * 100).toFixed(2)) : null,
+      period:     parseInt(periyod),
+      benchmarks,
+    });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -1291,38 +1306,26 @@ app.get('/fund/returns/:code', async (req, res) => {
   }
 });
 
-// GET /fund/search?q=GAR — Fon arama
+// GET /fund/search?q=GAR — Fon arama (getFplFonList endpoint)
 app.get('/fund/search', async (req, res) => {
   try {
-    const q     = req.query.q || '';
-    const today = new Date();
-    const start = new Date(today);
-    start.setDate(start.getDate() - 3);
+    const q    = (req.query.q || '').toUpperCase();
+    const data = await fetchTefas('getFplFonList', { dil: 'TR' });
 
-    const data = await fetchTefas('BindHistoryInfo', {
-      fontip: 'EMK',
-      bastarih: formatTefasDate(start),
-      bittarih: formatTefasDate(today),
-    });
+    const items = data?.resultList || data?.data || (Array.isArray(data) ? data : []);
+    if (!items.length) return res.json([]);
 
-    if (!data?.data?.length) return res.json([]);
-
-    // Benzersiz fonları al
-    const seen = new Set();
-    const funds = data.data
+    const funds = items
       .filter(d => {
-        const code = d.FONKODU || '';
-        const name = d.FONUNVAN || d.FONADI || '';
-        if (seen.has(code)) return false;
-        seen.add(code);
         if (!q) return true;
-        return code.toUpperCase().includes(q.toUpperCase()) ||
-               name.toUpperCase().includes(q.toUpperCase());
+        const code = (d.fonKodu || d.FONKODU || '').toUpperCase();
+        const name = (d.fonUnvan || d.FONUNVAN || d.fonAdi || '').toUpperCase();
+        return code.includes(q) || name.includes(q);
       })
       .map(d => ({
-        code:  d.FONKODU,
-        name:  d.FONUNVAN || d.FONADI || d.FONKODU,
-        price: parseFloat(d.FIYAT?.toString().replace(',', '.') || 0),
+        code:  d.fonKodu || d.FONKODU,
+        name:  d.fonUnvan || d.FONUNVAN || d.fonAdi || d.fonKodu,
+        type:  d.fonTuru || d.FONTURU || '',
       }));
 
     res.json(funds.slice(0, 50));
