@@ -66,88 +66,78 @@ async function fetchUsdTry() {
   }
 }
 
-// canlidoviz.com'dan tüm altın + gümüş verisi çek (ücretsiz, anlık, kapalıçarşı bazlı)
+// Truncgil v3'ten tüm altın + gümüş verisi çek (dakika bazlı güncelleniyor)
 async function fetchXauUsd() {
   try {
     const response = await axios.get(
-      'https://api.canlidoviz.com/web/items?marketId=1&type=1',
+      'https://finans.truncgil.com/v3/today.json',
       { timeout: 10000 }
     );
-    const items = response.data;
-
-    if (!Array.isArray(items) || items.length === 0) {
-      console.log('canlidoviz: veri bos');
-      return;
-    }
-
-    // İlk çalışmada item listesini logla
-    if (goldData.xauusd === 0) {
-      console.log('canlidoviz items:', items.map(i => i.code || i.name || i.symbol).join(', '));
-    }
+    const data = response.data;
 
     const parsePrice = (val) => {
       if (!val) return 0;
-      return parseFloat(String(val).replace(/\./g, '').replace(',', '.')) || 0;
+      return parseFloat(String(val).replace(/\./g, '').replace(',', '.').replace('$', '').trim()) || 0;
     };
 
-    // Her item'ı işle
-    items.forEach(item => {
-      const code = (item.code || item.symbol || item.name || '').toUpperCase();
-      const sell = parsePrice(item.sell || item.satis || item.ask);
-      const buy  = parsePrice(item.buy  || item.alis  || item.bid);
-      const price = sell > 0 ? sell : buy;
-      if (price <= 0) return;
+    const parseChange = (val) => {
+      if (!val) return 0;
+      return parseFloat(String(val).replace('%', '').replace(',', '.').trim()) || 0;
+    };
 
-      // Gram altın
-      if (code.includes('GRAM') || code === 'GA' || code === 'GRAM_ALTIN' || code === 'GRAMALTIN') {
-        const prev = goldData.gramTry > 0 ? goldData.gramTry : price;
-        goldData.gramTry = price;
-        goldData.change  = Number((((price - prev) / prev) * 100).toFixed(2));
-        goldData.high24h = Math.max(goldData.high24hTry || price, price);
-        goldData.low24h  = goldData.low24hTry > 0 ? Math.min(goldData.low24hTry, price) : price;
-        goldData.high24hTry = goldData.high24h;
-        goldData.low24hTry  = goldData.low24h;
-        goldData.updatedAt  = new Date().toISOString();
-        // USD karşılığını hesapla
-        if (goldData.usdtry > 0) {
-          goldData.xauusd = Number(((price * 31.1035) / goldData.usdtry).toFixed(2));
-        }
-        console.log(`Altin (canlidoviz): ${price} TL/gram`);
+    // Gram altın
+    const gramSell = parsePrice(data['gram-altin']?.Selling);
+    const gramBuy  = parsePrice(data['gram-altin']?.Buying);
+    const gramChange = parseChange(data['gram-altin']?.Change);
+    if (gramSell > 0) {
+      goldData.gramTry   = gramSell;
+      goldData.change    = gramChange;
+      goldData.high24hTry = Math.max(goldData.high24hTry || gramSell, gramSell);
+      goldData.low24hTry  = goldData.low24hTry > 0 ? Math.min(goldData.low24hTry, gramSell) : gramSell;
+      goldData.updatedAt  = new Date().toISOString();
+      // ONS USD hesapla
+      const onsSell = parsePrice(data['ons']?.Selling);
+      if (onsSell > 0) goldData.xauusd = onsSell;
+      // USDTRY hesapla
+      if (goldData.xauusd > 0) {
+        goldData.usdtry = Number(((gramSell * 31.1035) / goldData.xauusd).toFixed(4));
       }
+      console.log('Altin (Truncgil v3): ' + gramSell + ' TL/gram | Degisim: ' + gramChange + '%');
+    }
 
-      // Gümüş
-      if (code.includes('GUMUS') || code.includes('SILVER') || code === 'AG') {
-        const prev = goldData.gramSilverTry > 0 ? goldData.gramSilverTry : price;
-        goldData.gramSilverTry = price;
-        goldData.silverChange  = Number((((price - prev) / prev) * 100).toFixed(2));
-        console.log(`Gumus (canlidoviz): ${price} TL/gram`);
+    // Gümüş
+    const gumusSell   = parsePrice(data['gumus']?.Selling);
+    const gumusChange = parseChange(data['gumus']?.Change);
+    if (gumusSell > 0) {
+      const prevSilver = goldData.gramSilverTry > 0 ? goldData.gramSilverTry : gumusSell;
+      goldData.gramSilverTry = gumusSell;
+      goldData.silverChange  = gumusChange;
+      console.log('Gumus (Truncgil v3): ' + gumusSell + ' TL/gram | Degisim: ' + gumusChange + '%');
+    }
+
+    // Sarrafiye
+    const sarrafiyeKeys = {
+      'ceyrek-altin':      'CEYREK_YENI',
+      'yarim-altin':       'YARIM_YENI',
+      'tam-altin':         'TEK_YENI',
+      'cumhuriyet-altini': 'CUM_ALTIN',
+      'ata-altin':         'ATA_ALTIN',
+      'resat-altin':       'RESAT_ALTIN',
+    };
+
+    Object.entries(sarrafiyeKeys).forEach(([key, symbol]) => {
+      const sell   = parsePrice(data[key]?.Selling);
+      const buy    = parsePrice(data[key]?.Buying);
+      const change = parseChange(data[key]?.Change);
+      if (sell > 0) {
+        sarrafiyeData[symbol] = { symbol, price: sell, bid: buy, change };
       }
-
-      // Sarrafiye
-      const sarrafiyeMap = {
-        'CEYREK': 'CEYREK_YENI', 'CA': 'CEYREK_YENI',
-        'YARIM':  'YARIM_YENI',  'YA': 'YARIM_YENI',
-        'TAM':    'TEK_YENI',    'TA': 'TEK_YENI',
-        'CUM':    'CUM_ALTIN',   'CA2': 'CUM_ALTIN',
-        'ATA':    'ATA_ALTIN',
-        'RESAT':  'RESAT_ALTIN',
-      };
-
-      Object.keys(sarrafiyeMap).forEach(key => {
-        if (code.includes(key)) {
-          const symbol = sarrafiyeMap[key];
-          sarrafiyeData[symbol] = {
-            ...sarrafiyeData[symbol],
-            symbol,
-            price: sell > 0 ? sell : price,
-            bid: buy,
-          };
-        }
-      });
     });
 
+    console.log('Sarrafiye (Truncgil v3): Ceyrek=' + (sarrafiyeData.CEYREK_YENI?.price || 0) + ' Tam=' + (sarrafiyeData.TEK_YENI?.price || 0));
+
   } catch (e) {
-    console.log('canlidoviz hata:', e.message, '— goldpricez fallback...');
+    console.log('Truncgil v3 hata:', e.message, '— goldpricez fallback...');
     // Fallback: goldpricez.com
     try {
       const response = await axios.get(
@@ -277,90 +267,6 @@ function getGoldHistory(period) {
   }
   return goldHistoryCache[period] || [];
 }
-
-// Truncgil'den sarrafiye fiyatları çek (ücretsiz, API key yok)
-let sarrafiyeData = {};
-
-async function fetchSarrafiye() {
-  try {
-    const response = await axios.get(
-      'https://finans.truncgil.com/today.json',
-      { timeout: 10000 }
-    );
-    const data = response.data;
-
-    // Fiyat string'i parse et: "10.741,00" → 10741.00
-    const parsePrice = (val) => {
-      if (!val) return 0;
-      return parseFloat(String(val).replace(/\./g, '').replace(',', '.')) || 0;
-    };
-
-    sarrafiyeData = {
-      CEYREK_YENI: {
-        symbol: 'CEYREK_YENI',
-        name:   'Çeyrek Altın',
-        price:  parsePrice(data['ceyrek-altin']?.Satış),
-        bid:    parsePrice(data['ceyrek-altin']?.Alış),
-        change: 0,
-      },
-      YARIM_YENI: {
-        symbol: 'YARIM_YENI',
-        name:   'Yarım Altın',
-        price:  parsePrice(data['yarim-altin']?.Satış),
-        bid:    parsePrice(data['yarim-altin']?.Alış),
-        change: 0,
-      },
-      TEK_YENI: {
-        symbol: 'TEK_YENI',
-        name:   'Tam Altın',
-        price:  parsePrice(data['tam-altin']?.Satış),
-        bid:    parsePrice(data['tam-altin']?.Alış),
-        change: 0,
-      },
-      XAUUSD_TR: {
-        symbol: 'XAUUSD',
-        name:   'Ons Altın',
-        price:  parsePrice(data['ons']?.Satış),
-        bid:    parsePrice(data['ons']?.Alış),
-        change: 0,
-      },
-      CUM_ALTIN: {
-        symbol: 'CUM_ALTIN',
-        name:   'Cumhuriyet Altını',
-        price:  parsePrice(data['cumhuriyet-altini']?.Satış),
-        bid:    parsePrice(data['cumhuriyet-altini']?.Alış),
-        change: 0,
-      },
-      ATA_ALTIN: {
-        symbol: 'ATA_ALTIN',
-        name:   'Ata Altın',
-        price:  parsePrice(data['ata-altin']?.Satış),
-        bid:    parsePrice(data['ata-altin']?.Alış),
-        change: 0,
-      },
-      RESAT_ALTIN: {
-        symbol: 'RESAT_ALTIN',
-        name:   'Reşat Altın',
-        price:  parsePrice(data['resat-altin']?.Satış),
-        bid:    parsePrice(data['resat-altin']?.Alış),
-        change: 0,
-      },
-      GUMUS: {
-        symbol: 'GUMUS',
-        name:   'Gram Gümüş',
-        price:  parsePrice(data['gumus']?.Satış),
-        bid:    parsePrice(data['gumus']?.Alış),
-        change: 0,
-      },
-    };
-
-    // Gümüş değişim hesapla
-    const newSilverPrice = sarrafiyeData.GUMUS?.price || 0;
-    if (newSilverPrice > 0) {
-      const prevSilver = goldData.gramSilverTry > 0 ? goldData.gramSilverTry : newSilverPrice;
-      goldData.silverChange  = Number((((newSilverPrice - prevSilver) / prevSilver) * 100).toFixed(2));
-      goldData.gramSilverTry = newSilverPrice;
-    }
 
     console.log(`Sarrafiye yuklendi: Ceyrek=${sarrafiyeData.CEYREK_YENI.price} TEK=${sarrafiyeData.TEK_YENI.price} Gumus=${sarrafiyeData.GUMUS.price}`);
 
