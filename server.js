@@ -77,12 +77,6 @@ async function fetchXauUsd() {
       try { data = JSON.parse(data); } catch(_) {}
     }
 
-    // Ilk calistirmada field'lari logla
-    if (goldData.xauusd === 0) {
-      console.log('goldpricez all fields:', Object.keys(data).join(', '));
-      console.log('goldpricez sample:', JSON.stringify(data).slice(0, 500));
-    }
-
     // Altin
     const xauusd = parseFloat(String(
       data.ounce_price_usd || data.ounce_in_usd || data.gold_ounce_price_usd || data.price || '0'
@@ -128,32 +122,80 @@ async function fetchXauUsd() {
   }
 }
 
-// Altın geçmiş veri
-let goldHistory = []; // [{time, price}]
+// Altın geçmiş veri cache — periyot bazlı
+// { '1D': [{time, price}], '1M': [...], ... }
+const goldHistoryCache = {};
+let goldIntraday = []; // 1D için 5dk'lık birikmiş veri
 
+// Yahoo Finance'den altın geçmiş veri çek
 async function fetchGoldHistory() {
-  // Geçmiş veri: goldpricez.com geçmiş endpoint yok, 
-  // her 5 dakikada bir gelen fiyatı biriktirir, 
-  // başlangıçta dummy data üretiriz
-  if (goldHistory.length === 0 && goldData.xauusd > 0) {
-    const now = Math.floor(Date.now() / 1000);
-    // Son 1 yıl için günlük dummy veri (gerçekçi trend)
-    goldHistory = Array.from({ length: 365 }, (_, i) => ({
-      time:  now - (364 - i) * 86400,
-      price: goldData.xauusd * (0.85 + (i / 364) * 0.15 + (Math.random() - 0.5) * 0.02),
-    }));
-    console.log(`Altin gecmis: ${goldHistory.length} kayit (baslangic)`);
+  const configs = [
+    { period: '1M', range: '1mo',  interval: '1h'  },
+    { period: '3M', range: '3mo',  interval: '1d'  },
+    { period: '6M', range: '6mo',  interval: '1d'  },
+    { period: '1Y', range: '1y',   interval: '1d'  },
+    { period: '5Y', range: '5y',   interval: '1wk' },
+  ];
+
+  for (const cfg of configs) {
+    try {
+      const url = `https://query1.finance.yahoo.com/v8/finance/chart/GC%3DF?interval=${cfg.interval}&range=${cfg.range}`;
+      const response = await axios.get(url, {
+        timeout: 15000,
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+          'Accept': 'application/json',
+        },
+      });
+
+      const result = response.data?.chart?.result?.[0];
+      if (result) {
+        const timestamps = result.timestamp || [];
+        const closes = result.indicators?.quote?.[0]?.close || [];
+        const data = timestamps
+          .map((t, i) => ({ time: t, price: closes[i] }))
+          .filter(item => item.price && !isNaN(item.price) && item.price > 0)
+          .sort((a, b) => a.time - b.time);
+
+        if (data.length > 0) {
+          goldHistoryCache[cfg.period] = data;
+          console.log(`Altin gecmis ${cfg.period}: ${data.length} kayit`);
+        }
+      }
+      await new Promise(r => setTimeout(r, 1000)); // Rate limit için bekle
+    } catch (e) {
+      console.log(`Altin gecmis ${cfg.period} hata:`, e.message);
+    }
   }
 }
 
-// Canlı fiyatı geçmişe ekle (5 dakikada bir çağrılır)
+// 1G için intraday veriyi biriktir (5dk'da bir çağrılır)
 function appendGoldHistory() {
   if (goldData.xauusd > 0) {
     const now = Math.floor(Date.now() / 1000);
-    goldHistory.push({ time: now, price: goldData.xauusd });
-    // Son 365 günü tut
-    if (goldHistory.length > 365 * 288) goldHistory.shift();
+    goldIntraday.push({ time: now, price: goldData.xauusd });
+    // Son 24 saati tut (288 nokta = 24saat / 5dk)
+    const cutoff = now - 24 * 60 * 60;
+    goldIntraday = goldIntraday.filter(h => h.time >= cutoff);
   }
+}
+
+// Periyoda göre history döndür
+function getGoldHistory(period) {
+  if (period === '1D') {
+    // 1G: birikmiş intraday veri
+    if (goldIntraday.length > 0) return goldIntraday;
+    // Yoksa son 24 saatlik dummy (başlangıç için)
+    if (goldData.xauusd > 0) {
+      const now = Math.floor(Date.now() / 1000);
+      return Array.from({ length: 12 }, (_, i) => ({
+        time: now - (11 - i) * 1800,
+        price: goldData.xauusd,
+      }));
+    }
+    return [];
+  }
+  return goldHistoryCache[period] || [];
 }
 
 // Truncgil'den sarrafiye fiyatları çek (ücretsiz, API key yok)
@@ -241,6 +283,7 @@ async function fetchSarrafiye() {
     }
 
     console.log(`Sarrafiye yuklendi: Ceyrek=${sarrafiyeData.CEYREK_YENI.price} TEK=${sarrafiyeData.TEK_YENI.price} Gumus=${sarrafiyeData.GUMUS.price}`);
+
     
   } catch (e) {
     console.log('Truncgil sarrafiye hata:', e.message);
@@ -284,7 +327,7 @@ app.get('/gold-prices', (req, res) => {
       high24h:   goldData.high24h ? Number(((goldData.high24h * goldData.usdtry) / 31.1035).toFixed(2)) : 0,
       low24h:    goldData.low24h  ? Number(((goldData.low24h  * goldData.usdtry) / 31.1035).toFixed(2)) : 0,
       updatedAt: goldData.updatedAt,
-      sparkline: goldHistory.slice(-24).map((h) =>
+      sparkline: goldIntraday.slice(-24).map((h) =>
         Number(((h.price * goldData.usdtry) / 31.1035).toFixed(2))
       ),
     },
@@ -296,7 +339,7 @@ app.get('/gold-prices', (req, res) => {
       high24h:   goldData.high24h,
       low24h:    goldData.low24h,
       updatedAt: goldData.updatedAt,
-      sparkline: goldHistory.slice(-24).map((h) => h.price),
+      sparkline: goldIntraday.slice(-24).map((h) => h.price),
     },
     CEYREK_YENI: {
       symbol:    'CEYREK_YENI',
@@ -306,7 +349,7 @@ app.get('/gold-prices', (req, res) => {
       high24h:   Number((goldData.high24h ? (goldData.high24h * goldData.usdtry / 31.1035) * 1.75 : 0).toFixed(2)),
       low24h:    Number((goldData.low24h  ? (goldData.low24h  * goldData.usdtry / 31.1035) * 1.75 : 0).toFixed(2)),
       updatedAt: goldData.updatedAt,
-      sparkline: goldHistory.slice(-24).map((h) =>
+      sparkline: goldIntraday.slice(-24).map((h) =>
         Number(((h.price * goldData.usdtry) / 31.1035 * 1.75).toFixed(2))
       ),
     },
@@ -318,7 +361,7 @@ app.get('/gold-prices', (req, res) => {
       high24h:   Number((goldData.high24h ? (goldData.high24h * goldData.usdtry / 31.1035) * 3.5 : 0).toFixed(2)),
       low24h:    Number((goldData.low24h  ? (goldData.low24h  * goldData.usdtry / 31.1035) * 3.5 : 0).toFixed(2)),
       updatedAt: goldData.updatedAt,
-      sparkline: goldHistory.slice(-24).map((h) =>
+      sparkline: goldIntraday.slice(-24).map((h) =>
         Number(((h.price * goldData.usdtry) / 31.1035 * 3.5).toFixed(2))
       ),
     },
@@ -330,7 +373,7 @@ app.get('/gold-prices', (req, res) => {
       high24h:   Number((goldData.high24h ? (goldData.high24h * goldData.usdtry / 31.1035) * 7 : 0).toFixed(2)),
       low24h:    Number((goldData.low24h  ? (goldData.low24h  * goldData.usdtry / 31.1035) * 7 : 0).toFixed(2)),
       updatedAt: goldData.updatedAt,
-      sparkline: goldHistory.slice(-24).map((h) =>
+      sparkline: goldIntraday.slice(-24).map((h) =>
         Number(((h.price * goldData.usdtry) / 31.1035 * 7).toFixed(2))
       ),
     },
@@ -342,7 +385,7 @@ app.get('/gold-prices', (req, res) => {
       high24h:   0,
       low24h:    0,
       updatedAt: goldData.updatedAt,
-      sparkline: goldHistory.slice(-24).map((h) =>
+      sparkline: goldIntraday.slice(-24).map((h) =>
         Number(((h.price * goldData.usdtry) / 31.1035 * 7.2).toFixed(2))
       ),
     },
@@ -354,7 +397,7 @@ app.get('/gold-prices', (req, res) => {
       high24h:   0,
       low24h:    0,
       updatedAt: goldData.updatedAt,
-      sparkline: goldHistory.slice(-24).map((h) =>
+      sparkline: goldIntraday.slice(-24).map((h) =>
         Number(((h.price * goldData.usdtry) / 31.1035 * 7.2).toFixed(2))
       ),
     },
@@ -366,7 +409,7 @@ app.get('/gold-prices', (req, res) => {
       high24h:   0,
       low24h:    0,
       updatedAt: goldData.updatedAt,
-      sparkline: goldHistory.slice(-24).map((h) =>
+      sparkline: goldIntraday.slice(-24).map((h) =>
         Number(((h.price * goldData.usdtry) / 31.1035 * 7.2).toFixed(2))
       ),
     },
@@ -378,7 +421,7 @@ app.get('/gold-prices', (req, res) => {
       high24h:   0,
       low24h:    0,
       updatedAt: goldData.updatedAt,
-      sparkline: goldHistory.slice(-24).map((h) => {
+      sparkline: goldIntraday.slice(-24).map((h) => {
         const ratio = goldData.xauusd > 0 && sarrafiyeData.GUMUS?.price > 0
           ? sarrafiyeData.GUMUS.price / goldData.gramTry
           : 0.028;
@@ -391,32 +434,40 @@ app.get('/gold-prices', (req, res) => {
 // GET /chart/gold/:symbol — altın chart verisi
 app.get('/chart/gold/:symbol', (req, res) => {
   const symbol = req.params.symbol.toUpperCase();
-  const period = req.query.period || '1D';
+  const backendPeriod = req.query.period || '1D';
 
-  if (goldHistory.length === 0) {
-    return res.status(404).json({ error: 'Veri henüz yüklenmedi' });
+  // Flutter'dan gelen periyot map: 1D→1D, 1M→1M, 3M→3M, 6M→6M, 1Y→1Y, 5Y→5Y
+  const history = getGoldHistory(backendPeriod);
+
+  if (history.length === 0) {
+    // Veri yok — 1D için mevcut fiyatla tek nokta döndür
+    if (goldData.xauusd > 0 && goldData.usdtry > 0) {
+      const now = Math.floor(Date.now() / 1000);
+      const gramTry = Number(((goldData.xauusd * goldData.usdtry) / 31.1035).toFixed(2));
+      return res.json([
+        { time: now - 3600, price: gramTry },
+        { time: now,        price: gramTry },
+      ]);
+    }
+    return res.status(404).json({ error: 'Veri henüz yuklenmedi' });
   }
 
-  // Gümüş chart — xagusd ile hesapla
+  const multiplier = GOLD_MULTIPLIERS[symbol] || 1.0;
+  const isTry = symbol !== 'XAUUSD';
+
+  // Gümüş chart
   if (symbol === 'GUMUS') {
-    if (goldData.xagusd === 0 || goldData.usdtry === 0) {
-      return res.status(404).json({ error: 'Gümüş verisi henüz yüklenmedi' });
-    }
-    // Gümüş için goldHistory yok, sabit ratio kullan
     const silverGoldRatio = goldData.xagusd > 0 && goldData.xauusd > 0
       ? goldData.xagusd / goldData.xauusd
       : 0.013;
-    const data = goldHistory.map((h) => ({
+    const data = history.map(h => ({
       time:  h.time,
       price: Number(((h.price * silverGoldRatio * goldData.usdtry) / 31.1035).toFixed(4)),
     }));
     return res.json(data);
   }
 
-  const multiplier = GOLD_MULTIPLIERS[symbol] || 1.0;
-  const isTry = symbol !== 'XAUUSD';
-
-  const data = goldHistory.map((h) => ({
+  const data = history.map(h => ({
     time:  h.time,
     price: isTry
       ? Number(((h.price * goldData.usdtry) / 31.1035 * multiplier).toFixed(2))
@@ -733,13 +784,22 @@ async function initialize() {
 
     // Altın verilerini hemen yükle
     await updateGoldData();
-    await fetchGoldHistory();
+    appendGoldHistory(); // İlk noktayı ekle
+
+    // Geçmiş veriyi arka planda yükle
+    fetchGoldHistory().then(() => {
+      console.log('Altin gecmis veri tamamlandi');
+    });
 
     // 5 dakikada bir altın fiyatını güncelle
     setInterval(async () => {
       await updateGoldData();
       appendGoldHistory();
     }, 5 * 60 * 1000);
+
+    // Geçmiş veriyi saatte bir güncelle
+    setInterval(() => fetchGoldHistory(), 60 * 60 * 1000);
+
     // TCMB kurunu saatte bir güncelle
     setInterval(() => fetchUsdTry(), 60 * 60 * 1000);
 
