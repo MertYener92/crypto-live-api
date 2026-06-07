@@ -276,9 +276,8 @@ function getGoldHistory(period) {
   }
 }
 
-// Tum altin/gumus verilerini guncelle
+// Tum altin/gumus verilerini guncelle (Truncgil v3 tek kaynak)
 async function updateGoldData() {
-  await fetchUsdTry();
   await fetchXauUsd();
 }
 
@@ -785,17 +784,16 @@ async function initialize() {
       console.log('Altin gecmis veri tamamlandi');
     });
 
-    // 5 dakikada bir altın fiyatını güncelle
+    // 2 dakikada bir altın fiyatını güncelle (Truncgil dakika bazlı)
     setInterval(async () => {
       await updateGoldData();
       appendGoldHistory();
-    }, 5 * 60 * 1000);
+    }, 2 * 60 * 1000);
 
     // Geçmiş veriyi saatte bir güncelle
     setInterval(() => fetchGoldHistory(), 60 * 60 * 1000);
 
-    // TCMB kurunu saatte bir güncelle
-    setInterval(() => fetchUsdTry(), 60 * 60 * 1000);
+
 
     setTimeout(() => {
       loadSparklines();
