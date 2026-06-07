@@ -1170,23 +1170,25 @@ app.get('/fund/price/:code', async (req, res) => {
 
     console.log(`TEFAS price ${code}:`, JSON.stringify(data).slice(0, 300));
 
-    const items = data?.data || data?.fiyatlar || (Array.isArray(data) ? data : null);
+    const items = data?.resultList || data?.data || data?.fiyatlar || (Array.isArray(data) ? data : null);
     if (!items?.length) return res.status(404).json({ error: 'Fiyat yok', raw: data });
 
     const latest = items[items.length - 1];
     const prev   = items.length > 1 ? items[items.length - 2] : null;
-    const price  = parseFloat(String(latest.FIYAT || latest.fiyat || latest.birimPayDegeri || 0).replace(',', '.'));
-    const prevP  = prev ? parseFloat(String(prev.FIYAT || prev.fiyat || prev.birimPayDegeri || price).replace(',', '.')) : price;
+    const price  = parseFloat(String(latest.fiyat || latest.FIYAT || latest.birimPayDegeri || 0).replace(',', '.'));
+    const prevP  = prev ? parseFloat(String(prev.fiyat || prev.FIYAT || prev.birimPayDegeri || price).replace(',', '.')) : price;
     const change = prevP > 0 ? ((price - prevP) / prevP) * 100 : 0;
 
     res.json({
       code,
-      name:          data.fonUnvani || data.fonAdi || latest.FONUNVAN || code,
+      name:          latest.fonUnvan || data.fonUnvani || latest.FONUNVAN || code,
       price,
       change:        Number(change.toFixed(4)),
-      date:          latest.TARIH || latest.tarih || latest.date,
-      totalValue:    parseFloat(String(latest.PORTFOYBUYUKLUGU || latest.portfoyBuyuklugu || 0).replace(',', '.')),
-      investorCount: parseInt(latest.KISISAYISI || latest.kisiSayisi || 0),
+      date:          latest.tarih || latest.TARIH || latest.date,
+      totalValue:    parseFloat(String(latest.portfoyBuyuklugu || latest.PORTFOYBUYUKLUGU || 0).replace(',', '.')),
+      investorCount: parseInt(latest.kisiSayisi || latest.KISISAYISI || 0),
+      kategoriDerece: latest.kategoriDerece || null,
+      kategoriFonSay: latest.kategoriFonSay || null,
     });
   } catch (e) {
     console.log(`/fund/price/${req.params.code} hata:`, e.message);
@@ -1205,12 +1207,12 @@ app.get('/fund/chart/:code', async (req, res) => {
     const data = await fetchTefas('fonFiyatBilgiGetir', { fonKodu: code, dil: 'TR', periyod });
     if (!data || data.faultCode) return res.status(404).json({ error: 'Veri yok', raw: data });
 
-    const items = data?.data || data?.fiyatlar || (Array.isArray(data) ? data : []);
+    const items = data?.resultList || data?.data || data?.fiyatlar || (Array.isArray(data) ? data : []);
     if (!items.length) return res.status(404).json({ error: 'Fiyat yok' });
 
     const chartData = items.map(item => ({
-      date:  item.TARIH || item.tarih || item.date,
-      price: parseFloat(String(item.FIYAT || item.fiyat || item.birimPayDegeri || 0).replace(',', '.')),
+      date:  item.tarih || item.TARIH || item.date,
+      price: parseFloat(String(item.fiyat || item.FIYAT || item.birimPayDegeri || 0).replace(',', '.')),
     })).filter(item => item.price > 0);
 
     res.json(chartData);
@@ -1257,13 +1259,13 @@ app.get('/fund/returns/:code', async (req, res) => {
     const data = await fetchTefas('fonFiyatBilgiGetir', { fonKodu: code, dil: 'TR', periyod: 60 });
     if (!data || data.faultCode) return res.status(404).json({ error: 'Veri yok' });
 
-    const items = data?.data || data?.fiyatlar || (Array.isArray(data) ? data : []);
+    const items = data?.resultList || data?.data || data?.fiyatlar || (Array.isArray(data) ? data : []);
     if (!items.length) return res.status(404).json({ error: 'Fiyat yok' });
 
     const prices = items
       .map(d => ({
-        date:  new Date(d.TARIH || d.tarih || d.date),
-        price: parseFloat(String(d.FIYAT || d.fiyat || d.birimPayDegeri || 0).replace(',', '.')),
+        date:  new Date(d.tarih || d.TARIH || d.date),
+        price: parseFloat(String(d.fiyat || d.FIYAT || d.birimPayDegeri || 0).replace(',', '.')),
       }))
       .filter(d => d.price > 0)
       .sort((a, b) => a.date - b.date);
