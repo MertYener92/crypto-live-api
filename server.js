@@ -170,8 +170,10 @@ const goldHistoryCache = {};
 const silverHistoryCache = {};
 const platinHistoryCache = {};
 const paladyumHistoryCache = {};
-let goldIntraday = [];
-let silverIntraday = [];
+let goldIntraday    = [];
+let silverIntraday  = [];
+let platinIntraday  = [];
+let paladyumIntraday = [];
 
 // Yahoo Finance'den altın + USDTRY geçmiş veri çek
 async function fetchYahooData(symbol, range, interval) {
@@ -290,12 +292,31 @@ async function fetchGoldHistory() {
 
 // 1G için intraday veriyi biriktir (5dk'da bir çağrılır)
 function appendGoldHistory() {
-  if (goldData.xauusd > 0) {
-    const now = Math.floor(Date.now() / 1000);
-    goldIntraday.push({ time: now, price: goldData.xauusd });
-    // Son 24 saati tut (288 nokta = 24saat / 5dk)
-    const cutoff = now - 24 * 60 * 60;
+  const now = Math.floor(Date.now() / 1000);
+  const cutoff = now - 24 * 60 * 60;
+
+  // Gram altın
+  if (goldData.gramTry > 0) {
+    goldIntraday.push({ time: now, price: goldData.gramTry });
     goldIntraday = goldIntraday.filter(h => h.time >= cutoff);
+  }
+
+  // Gümüş
+  if (goldData.gramSilverTry > 0) {
+    silverIntraday.push({ time: now, price: goldData.gramSilverTry });
+    silverIntraday = silverIntraday.filter(h => h.time >= cutoff);
+  }
+
+  // Platin
+  if (sarrafiyeData.PLATIN?.price > 0) {
+    platinIntraday.push({ time: now, price: sarrafiyeData.PLATIN.price });
+    platinIntraday = platinIntraday.filter(h => h.time >= cutoff);
+  }
+
+  // Paladyum
+  if (sarrafiyeData.PALADYUM?.price > 0) {
+    paladyumIntraday.push({ time: now, price: sarrafiyeData.PALADYUM.price });
+    paladyumIntraday = paladyumIntraday.filter(h => h.time >= cutoff);
   }
 }
 
@@ -464,7 +485,7 @@ app.get('/gold-prices', (req, res) => {
       high24h:   0,
       low24h:    0,
       updatedAt: goldData.updatedAt,
-      sparkline: [],
+      sparkline: platinIntraday.slice(-24).map(h => h.price),
     },
     PALADYUM: {
       symbol:    'PALADYUM',
@@ -474,7 +495,7 @@ app.get('/gold-prices', (req, res) => {
       high24h:   0,
       low24h:    0,
       updatedAt: goldData.updatedAt,
-      sparkline: [],
+      sparkline: paladyumIntraday.slice(-24).map(h => h.price),
     },
   });
 });
