@@ -1141,60 +1141,52 @@ function formatTefasDate(date) {
   return `${y}-${m}-${d}`;
 }
 
-// Yeni TEFAS API (2026) - GET endpoint
+// TEFAS API - POST JSON
 async function fetchTefas(endpoint, params) {
-  const url = new URL(`https://www.tefas.gov.tr/api/funds/${endpoint}`);
-  Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v));
-  const response = await axios.get(url.toString(), {
-    timeout: 15000,
-    headers: {
-      'Accept': 'application/json',
-      'Origin': 'https://www.tefas.gov.tr',
-      'Referer': 'https://www.tefas.gov.tr/',
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-    },
-  });
+  const response = await axios.post(
+    `https://www.tefas.gov.tr/api/funds/${endpoint}`,
+    params,
+    {
+      timeout: 15000,
+      headers: {
+        'Accept': 'application/json, text/plain, */*',
+        'Accept-Language': 'tr-TR,tr;q=0.9',
+        'Content-Type': 'application/json',
+        'Origin': 'https://www.tefas.gov.tr',
+        'Referer': 'https://www.tefas.gov.tr/',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+      },
+    }
+  );
   return response.data;
 }
 
 // GET /fund/price/:code — Fon anlık fiyat + temel bilgiler
 app.get('/fund/price/:code', async (req, res) => {
   try {
-    const code  = req.params.code.toUpperCase();
-    const today = new Date();
-    const start = new Date(today);
-    start.setDate(start.getDate() - 10);
+    const code = req.params.code.toUpperCase();
+    const data = await fetchTefas('fonFiyatBilgiGetir', { fonKodu: code, dil: 'TR', periyod: 1 });
+    if (!data || data.faultCode) return res.status(404).json({ error: 'Fon bulunamadı', raw: data });
 
-    const data = await fetchTefas('fonGnlBlgSiraliGetir', {
-      fonKod:   code,
-      basTarih: formatTefasDate(start),
-      bitTarih: formatTefasDate(today),
-    });
+    console.log(`TEFAS price ${code}:`, JSON.stringify(data).slice(0, 300));
 
-    // Debug: ilk çağrıda response'u logla
-    if (!data) return res.status(404).json({ error: 'Veri yok', raw: null });
-    
-    console.log(`TEFAS /fund/price/${code} response keys:`, Object.keys(data).join(', '));
-
-    const items = data?.data || data?.result || data?.items || (Array.isArray(data) ? data : null);
-    if (!items || items.length === 0) {
-      return res.status(404).json({ error: 'Fon bulunamadı', raw: data });
-    }
+    const items = data?.data || data?.fiyatlar || (Array.isArray(data) ? data : null);
+    if (!items?.length) return res.status(404).json({ error: 'Fiyat yok', raw: data });
 
     const latest = items[items.length - 1];
     const prev   = items.length > 1 ? items[items.length - 2] : null;
-    const price  = parseFloat(String(latest.FIYAT || latest.fiyat || latest.price || latest.nav || 0).replace(',', '.'));
-    const prevP  = prev ? parseFloat(String(prev.FIYAT || prev.fiyat || prev.price || prev.nav || price).replace(',', '.')) : price;
+    const price  = parseFloat(String(latest.FIYAT || latest.fiyat || latest.birimPayDegeri || 0).replace(',', '.'));
+    const prevP  = prev ? parseFloat(String(prev.FIYAT || prev.fiyat || prev.birimPayDegeri || price).replace(',', '.')) : price;
     const change = prevP > 0 ? ((price - prevP) / prevP) * 100 : 0;
 
     res.json({
       code,
-      name:          latest.FONUNVAN || latest.FONADI || latest.fonAdi || latest.name || code,
+      name:          data.fonUnvani || data.fonAdi || latest.FONUNVAN || code,
       price,
       change:        Number(change.toFixed(4)),
       date:          latest.TARIH || latest.tarih || latest.date,
-      totalValue:    parseFloat(String(latest.PORTFOYBUYUKLUGU || latest.portfoyBuyuklugu || latest.totalValue || 0).replace(',', '.')),
-      investorCount: parseInt(latest.KISISAYISI || latest.kisiSayisi || latest.investorCount || 0),
+      totalValue:    parseFloat(String(latest.PORTFOYBUYUKLUGU || latest.portfoyBuyuklugu || 0).replace(',', '.')),
+      investorCount: parseInt(latest.KISISAYISI || latest.kisiSayisi || 0),
     });
   } catch (e) {
     console.log(`/fund/price/${req.params.code} hata:`, e.message);
@@ -1207,38 +1199,19 @@ app.get('/fund/chart/:code', async (req, res) => {
   try {
     const code   = req.params.code.toUpperCase();
     const period = req.query.period || '1M';
-    const today  = new Date();
-    const start  = new Date(today);
+    const periyodMap = { '1M': 1, '3M': 3, '6M': 6, '1Y': 12, '3Y': 36, '5Y': 60 };
+    const periyod = periyodMap[period] || 1;
 
-    switch (period) {
-      case '1M': start.setMonth(start.getMonth() - 1); break;
-      case '3M': start.setMonth(start.getMonth() - 3); break;
-      case '6M': start.setMonth(start.getMonth() - 6); break;
-      case '1Y': start.setFullYear(start.getFullYear() - 1); break;
-      case '3Y': start.setFullYear(start.getFullYear() - 3); break;
-      case '5Y': start.setFullYear(start.getFullYear() - 5); break;
-      default:   start.setMonth(start.getMonth() - 1);
-    }
+    const data = await fetchTefas('fonFiyatBilgiGetir', { fonKodu: code, dil: 'TR', periyod });
+    if (!data || data.faultCode) return res.status(404).json({ error: 'Veri yok', raw: data });
 
-    // Yeni TEFAS API — chunk gerekmiyor, fixed look-back destekliyor
-    const months = { '1M': 1, '3M': 3, '6M': 6, '1Y': 12, '3Y': 36, '5Y': 60 };
-    const lookback = months[period] || 1;
+    const items = data?.data || data?.fiyatlar || (Array.isArray(data) ? data : []);
+    if (!items.length) return res.status(404).json({ error: 'Fiyat yok' });
 
-    const data = await fetchTefas('fonGnlBlgSiraliGetir', {
-      fonKod:   code,
-      basTarih: formatTefasDate(start),
-      bitTarih: formatTefasDate(today),
-    });
-
-    const items = data?.data || data?.result || data?.items || (Array.isArray(data) ? data : []);
-    if (!items.length) return res.status(404).json({ error: 'Veri yok' });
-
-    const chartData = items
-      .map(item => ({
-        date:  item.TARIH || item.tarih || item.date,
-        price: parseFloat(String(item.FIYAT || item.fiyat || item.price || item.nav || 0).replace(',', '.')),
-      }))
-      .filter(item => item.price > 0);
+    const chartData = items.map(item => ({
+      date:  item.TARIH || item.tarih || item.date,
+      price: parseFloat(String(item.FIYAT || item.fiyat || item.birimPayDegeri || 0).replace(',', '.')),
+    })).filter(item => item.price > 0);
 
     res.json(chartData);
   } catch (e) {
@@ -1249,33 +1222,28 @@ app.get('/fund/chart/:code', async (req, res) => {
 // GET /fund/allocation/:code — Portföy dağılımı
 app.get('/fund/allocation/:code', async (req, res) => {
   try {
-    const code  = req.params.code.toUpperCase();
-    const today = new Date();
-    const start = new Date(today);
-    start.setDate(start.getDate() - 30);
+    const code = req.params.code.toUpperCase();
+    const data = await fetchTefas('fonProfilDtyGetir', { fonKodu: code, dil: 'TR' });
+    if (!data || data.faultCode) return res.status(404).json({ error: 'Dağılım yok', raw: data });
 
-    const data = await fetchTefas('dagilimSiraliGetirT', {
-      fonKod:   code,
-      basTarih: formatTefasDate(start),
-      bitTarih: formatTefasDate(today),
-    });
+    console.log(`TEFAS allocation ${code}:`, JSON.stringify(data).slice(0, 300));
 
-    const items = data?.data || data?.result || data?.items || (Array.isArray(data) ? data : []);
-    if (!items.length) return res.status(404).json({ error: 'Dağılım verisi yok', raw: data });
-
-    const latest = items[items.length - 1];
-    
-    // Dağılım alanlarını topla
+    // Dağılım verisi
+    const items = data?.data || data?.dagilim || data?.dagitim || (Array.isArray(data) ? data : []);
     const allocation = [];
-    const skipKeys = ['TARIH', 'tarih', 'date', 'FONKODU', 'fonKodu', 'code', 'FONUNVAN'];
-    Object.entries(latest).forEach(([key, val]) => {
-      if (skipKeys.includes(key)) return;
-      const v = parseFloat(String(val || 0).replace(',', '.'));
-      if (v > 0) allocation.push({ key, label: key, value: v });
-    });
-    allocation.sort((a, b) => b.value - a.value);
+    
+    if (items.length > 0) {
+      const latest = items[items.length - 1];
+      const skipKeys = ['TARIH', 'tarih', 'date', 'FONKODU', 'fonKodu', 'FONUNVAN'];
+      Object.entries(latest).forEach(([key, val]) => {
+        if (skipKeys.includes(key)) return;
+        const v = parseFloat(String(val || 0).replace(',', '.'));
+        if (v > 0) allocation.push({ key, label: key, value: v });
+      });
+      allocation.sort((a, b) => b.value - a.value);
+    }
 
-    res.json({ code, date: latest.TARIH || latest.tarih, allocation, raw: latest });
+    res.json({ code, allocation, raw: data });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -1284,29 +1252,24 @@ app.get('/fund/allocation/:code', async (req, res) => {
 // GET /fund/returns/:code — Getiri hesabı
 app.get('/fund/returns/:code', async (req, res) => {
   try {
-    const code  = req.params.code.toUpperCase();
-    const today = new Date();
-    const start = new Date(today);
-    start.setFullYear(start.getFullYear() - 5);
+    const code = req.params.code.toUpperCase();
+    // 5 yıllık veri çek
+    const data = await fetchTefas('fonFiyatBilgiGetir', { fonKodu: code, dil: 'TR', periyod: 60 });
+    if (!data || data.faultCode) return res.status(404).json({ error: 'Veri yok' });
 
-    const data = await fetchTefas('fonGnlBlgSiraliGetir', {
-      fonKod:   code,
-      basTarih: formatTefasDate(start),
-      bitTarih: formatTefasDate(today),
-    });
-
-    const items = data?.data || data?.result || data?.items || (Array.isArray(data) ? data : []);
-    if (!items.length) return res.status(404).json({ error: 'Veri yok' });
+    const items = data?.data || data?.fiyatlar || (Array.isArray(data) ? data : []);
+    if (!items.length) return res.status(404).json({ error: 'Fiyat yok' });
 
     const prices = items
       .map(d => ({
         date:  new Date(d.TARIH || d.tarih || d.date),
-        price: parseFloat(String(d.FIYAT || d.fiyat || d.price || d.nav || 0).replace(',', '.')),
+        price: parseFloat(String(d.FIYAT || d.fiyat || d.birimPayDegeri || 0).replace(',', '.')),
       }))
       .filter(d => d.price > 0)
       .sort((a, b) => a.date - b.date);
 
     const current = prices[prices.length - 1].price;
+    const today = new Date();
 
     function getReturn(months) {
       const target = new Date(today);
