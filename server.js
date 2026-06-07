@@ -1306,11 +1306,96 @@ app.get('/fund/returns/:code', async (req, res) => {
   }
 });
 
+// GET /fund/sync — Takasbank'tan fon listesi çekip Supabase'e kaydet
+app.get('/fund/sync', async (req, res) => {
+  res.json({ status: 'started - check logs' });
+
+  try {
+    // Takasbank Excel'den fon listesi (public)
+    const response = await axios.get(
+      'https://www.takasbank.com.tr/plugins/ExcelExportTefasFundsTradingInvestmentPlatform?language=tr',
+      { timeout: 30000, responseType: 'arraybuffer' }
+    );
+
+    // Excel parse için xlsx paketi gerekli - olmadığı için CSV yaklaşımı dene
+    console.log('Takasbank response size:', response.data.byteLength);
+
+    // Alternatif: TEFAS getFplFonList'i farklı header ile dene
+    const tefasData = await axios.post(
+      'https://www.tefas.gov.tr/api/funds/getFplFonList',
+      {},
+      {
+        timeout: 15000,
+        headers: {
+          'Accept': 'application/json',
+          'Content-Type': 'application/json',
+          'Origin': 'https://www.tefas.gov.tr',
+          'Referer': 'https://www.tefas.gov.tr/BESSorgu.aspx',
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+          'sec-fetch-site': 'same-origin',
+          'sec-fetch-mode': 'cors',
+        }
+      }
+    );
+
+    const items = tefasData.data?.resultList || tefasData.data?.data || (Array.isArray(tefasData.data) ? tefasData.data : []);
+    console.log(`getFplFonList: ${items.length} fon`);
+
+    if (items.length > 0) {
+      console.log('Sample:', JSON.stringify(items[0]));
+
+      let added = 0;
+      for (const item of items) {
+        const code = item.fonKodu || item.FONKODU;
+        const name = item.fonUnvan || item.FONUNVAN || item.fonAdi || code;
+        if (!code) continue;
+
+        try {
+          await axios.post(
+            `${SUPABASE_URL}/rest/v1/assets`,
+            {
+              symbol: code,
+              name,
+              type: 'fund',
+              provider: 'tefas',
+              currency: 'TRY',
+              search_keywords: `${code.toLowerCase()} ${name.toLowerCase()} bes fon emeklilik`,
+              is_active: true,
+            },
+            {
+              headers: {
+                apikey: SUPABASE_KEY,
+                Authorization: `Bearer ${SUPABASE_KEY}`,
+                'Content-Type': 'application/json',
+                Prefer: 'resolution=ignore-duplicates',
+              },
+            }
+          );
+          added++;
+        } catch(_) {}
+
+        await new Promise(r => setTimeout(r, 50));
+      }
+      console.log(`Fund sync tamamlandi: ${added} fon eklendi`);
+    }
+  } catch (e) {
+    console.log('Fund sync hata:', e.message);
+  }
+});
+
 // GET /fund/search?q=GAR — Fon arama (getFplFonList endpoint)
 app.get('/fund/search', async (req, res) => {
   try {
     const q    = (req.query.q || '').toUpperCase();
-    const data = await fetchTefas('getFplFonList', {});
+    // Birkaç endpoint dene
+    let data = null;
+    for (const ep of ['getFplFonList', 'fonBilgiGetir', 'fonListeGetir']) {
+      try {
+        const r = await fetchTefas(ep, {});
+        if (r && !r.faultCode) { data = r; break; }
+      } catch(_) {}
+    }
+    if (!data) return res.status(404).json({ error: 'Search endpoint bulunamadi' });
 
     console.log('getFplFonList response:', JSON.stringify(data).slice(0, 300));
     const items = data?.resultList || data?.data || data?.fonList || (Array.isArray(data) ? data : []);
