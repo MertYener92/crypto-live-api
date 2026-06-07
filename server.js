@@ -1128,3 +1128,292 @@ app.get('/fng', async (req, res) => {
 
 initialize();
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+
+// ─────────────────────────────────────────────────────────────────────────────
+// BES FONLARI — TEFAS
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Tarih formatı: DD.MM.YYYY
+function formatTefasDate(date) {
+  const d = date.getDate().toString().padStart(2, '0');
+  const m = (date.getMonth() + 1).toString().padStart(2, '0');
+  const y = date.getFullYear();
+  return `${d}.${m}.${y}`;
+}
+
+// TEFAS'tan fon verisi çek
+async function fetchTefas(endpoint, params) {
+  const response = await axios.post(
+    `https://www.tefas.gov.tr/api/DB/${endpoint}`,
+    new URLSearchParams(params).toString(),
+    {
+      timeout: 15000,
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Origin': 'https://www.tefas.gov.tr',
+        'Referer': 'https://www.tefas.gov.tr/',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+      },
+    }
+  );
+  return response.data;
+}
+
+// GET /fund/price/:code — Fon anlık fiyat + temel bilgiler
+app.get('/fund/price/:code', async (req, res) => {
+  try {
+    const code = req.params.code.toUpperCase();
+    const today = new Date();
+    const startDate = new Date(today);
+    startDate.setDate(startDate.getDate() - 7); // Son 7 gün (hafta sonu hesabı için)
+
+    const data = await fetchTefas('BindHistoryInfo', {
+      fontip: 'EMK',
+      fonkod: code,
+      bastarih: formatTefasDate(startDate),
+      bittarih: formatTefasDate(today),
+    });
+
+    if (!data?.data?.length) {
+      return res.status(404).json({ error: 'Fon bulunamadı' });
+    }
+
+    // En son veriyi al
+    const latest = data.data[data.data.length - 1];
+    const prev   = data.data.length > 1 ? data.data[data.data.length - 2] : null;
+    const price  = parseFloat(latest.FIYAT?.toString().replace(',', '.') || 0);
+    const prevPrice = prev ? parseFloat(prev.FIYAT?.toString().replace(',', '.') || price) : price;
+    const change = prevPrice > 0 ? ((price - prevPrice) / prevPrice) * 100 : 0;
+
+    res.json({
+      code,
+      name:           latest.FONUNVAN || latest.FONADI || code,
+      price,
+      change:         Number(change.toFixed(4)),
+      date:           latest.TARIH,
+      totalValue:     parseFloat(latest.PORTFOYBUYUKLUGU?.toString().replace(',', '.') || 0),
+      investorCount:  parseInt(latest.KISISAYISI || 0),
+      shares:         parseFloat(latest.TEDAVULDEKIPAYSAYISI?.toString().replace(',', '.') || 0),
+    });
+  } catch (e) {
+    console.log(`/fund/price/${req.params.code} hata:`, e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /fund/chart/:code?period=1M — Fon geçmiş fiyat serisi
+app.get('/fund/chart/:code', async (req, res) => {
+  try {
+    const code   = req.params.code.toUpperCase();
+    const period = req.query.period || '1M';
+    const today  = new Date();
+    const start  = new Date(today);
+
+    switch (period) {
+      case '1M': start.setMonth(start.getMonth() - 1); break;
+      case '3M': start.setMonth(start.getMonth() - 3); break;
+      case '6M': start.setMonth(start.getMonth() - 6); break;
+      case '1Y': start.setFullYear(start.getFullYear() - 1); break;
+      case '3Y': start.setFullYear(start.getFullYear() - 3); break;
+      case '5Y': start.setFullYear(start.getFullYear() - 5); break;
+      default:   start.setMonth(start.getMonth() - 1);
+    }
+
+    // TEFAS max 90 gün → büyük periyotlar için chunk'la
+    const allData = [];
+    let chunkEnd = new Date(today);
+
+    while (chunkEnd > start) {
+      const chunkStart = new Date(chunkEnd);
+      chunkStart.setDate(chunkStart.getDate() - 89);
+      if (chunkStart < start) chunkStart.setTime(start.getTime());
+
+      try {
+        const data = await fetchTefas('BindHistoryInfo', {
+          fontip: 'EMK',
+          fonkod: code,
+          bastarih: formatTefasDate(chunkStart),
+          bittarih: formatTefasDate(chunkEnd),
+        });
+        if (data?.data?.length) allData.unshift(...data.data);
+      } catch (_) {}
+
+      chunkEnd = new Date(chunkStart);
+      chunkEnd.setDate(chunkEnd.getDate() - 1);
+      await new Promise(r => setTimeout(r, 500));
+    }
+
+    if (!allData.length) return res.status(404).json({ error: 'Veri yok' });
+
+    const chartData = allData
+      .map(item => ({
+        date:  item.TARIH,
+        price: parseFloat(item.FIYAT?.toString().replace(',', '.') || 0),
+      }))
+      .filter(item => item.price > 0);
+
+    res.json(chartData);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /fund/allocation/:code — Portföy dağılımı
+app.get('/fund/allocation/:code', async (req, res) => {
+  try {
+    const code  = req.params.code.toUpperCase();
+    const today = new Date();
+    const start = new Date(today);
+    start.setDate(start.getDate() - 30);
+
+    const data = await fetchTefas('BindHistoryAllocation', {
+      fontip: 'EMK',
+      fonkod: code,
+      bastarih: formatTefasDate(start),
+      bittarih: formatTefasDate(today),
+    });
+
+    if (!data?.data?.length) return res.status(404).json({ error: 'Dağılım verisi yok' });
+
+    // En son dağılım
+    const latest = data.data[data.data.length - 1];
+
+    // Tüm alanları dağılım olarak topla
+    const allocation = [];
+    const fields = {
+      'HISSE_SENEDI':   'Hisse Senedi',
+      'KAMU_BORÇLANMA': 'Kamu Borçlanma',
+      'OZEL_BORÇLANMA': 'Özel Borçlanma',
+      'REPO':           'Repo',
+      'TERS_REPO':      'Ters Repo',
+      'DOVIZ':          'Döviz',
+      'ALTIN':          'Altın',
+      'DIGER':          'Diğer',
+      'PARA_PIYASASI':  'Para Piyasası',
+      'VADESIZ_MEVDUAT':'Vadesi̇z Mevduat',
+      'VADELI_MEVDUAT': 'Vadeli Mevduat',
+    };
+
+    // TEFAS'tan gelen tüm alanları tara
+    Object.keys(latest).forEach(key => {
+      const val = parseFloat(latest[key]?.toString().replace(',', '.') || 0);
+      if (val > 0 && key !== 'TARIH' && key !== 'FONKODU') {
+        const label = fields[key] || key;
+        allocation.push({ key, label, value: val });
+      }
+    });
+
+    allocation.sort((a, b) => b.value - a.value);
+
+    res.json({
+      code,
+      date: latest.TARIH,
+      allocation,
+      raw: latest,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /fund/returns/:code — Getiri hesabı (1A, 3A, 6A, 1Y, 3Y, 5Y)
+app.get('/fund/returns/:code', async (req, res) => {
+  try {
+    const code  = req.params.code.toUpperCase();
+    const today = new Date();
+    const start = new Date(today);
+    start.setFullYear(start.getFullYear() - 5); // Son 5 yıl
+
+    // Chunk'lı çek
+    const allData = [];
+    let chunkEnd = new Date(today);
+    while (chunkEnd > start) {
+      const chunkStart = new Date(chunkEnd);
+      chunkStart.setDate(chunkStart.getDate() - 89);
+      if (chunkStart < start) chunkStart.setTime(start.getTime());
+      try {
+        const data = await fetchTefas('BindHistoryInfo', {
+          fontip: 'EMK', fonkod: code,
+          bastarih: formatTefasDate(chunkStart),
+          bittarih: formatTefasDate(chunkEnd),
+        });
+        if (data?.data?.length) allData.unshift(...data.data);
+      } catch (_) {}
+      chunkEnd = new Date(chunkStart);
+      chunkEnd.setDate(chunkEnd.getDate() - 1);
+      await new Promise(r => setTimeout(r, 300));
+    }
+
+    if (!allData.length) return res.status(404).json({ error: 'Veri yok' });
+
+    const prices = allData
+      .map(d => ({ date: new Date(d.TARIH?.split('.').reverse().join('-')), price: parseFloat(d.FIYAT?.toString().replace(',', '.') || 0) }))
+      .filter(d => d.price > 0)
+      .sort((a, b) => a.date - b.date);
+
+    const current = prices[prices.length - 1].price;
+
+    function getReturn(months) {
+      const target = new Date(today);
+      target.setMonth(target.getMonth() - months);
+      const found = prices.find(p => p.date >= target);
+      if (!found) return null;
+      return Number((((current - found.price) / found.price) * 100).toFixed(2));
+    }
+
+    res.json({
+      code,
+      currentPrice: current,
+      returns: {
+        '1M':  getReturn(1),
+        '3M':  getReturn(3),
+        '6M':  getReturn(6),
+        '1Y':  getReturn(12),
+        '3Y':  getReturn(36),
+        '5Y':  getReturn(60),
+      }
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /fund/search?q=GAR — Fon arama
+app.get('/fund/search', async (req, res) => {
+  try {
+    const q     = req.query.q || '';
+    const today = new Date();
+    const start = new Date(today);
+    start.setDate(start.getDate() - 3);
+
+    const data = await fetchTefas('BindHistoryInfo', {
+      fontip: 'EMK',
+      bastarih: formatTefasDate(start),
+      bittarih: formatTefasDate(today),
+    });
+
+    if (!data?.data?.length) return res.json([]);
+
+    // Benzersiz fonları al
+    const seen = new Set();
+    const funds = data.data
+      .filter(d => {
+        const code = d.FONKODU || '';
+        const name = d.FONUNVAN || d.FONADI || '';
+        if (seen.has(code)) return false;
+        seen.add(code);
+        if (!q) return true;
+        return code.toUpperCase().includes(q.toUpperCase()) ||
+               name.toUpperCase().includes(q.toUpperCase());
+      })
+      .map(d => ({
+        code:  d.FONKODU,
+        name:  d.FONUNVAN || d.FONADI || d.FONKODU,
+        price: parseFloat(d.FIYAT?.toString().replace(',', '.') || 0),
+      }));
+
+    res.json(funds.slice(0, 50));
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
