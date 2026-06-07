@@ -165,7 +165,9 @@ async function fetchXauUsd() {
 // Altın geçmiş veri cache — periyot bazlı
 // { '1D': [{time, price}], '1M': [...], ... }
 const goldHistoryCache = {};
+const silverHistoryCache = {}; // Gümüş geçmiş veri
 let goldIntraday = []; // 1D için 5dk'lık birikmiş veri
+let silverIntraday = []; // Gümüş 1D intraday
 
 // Yahoo Finance'den altın + USDTRY geçmiş veri çek
 async function fetchYahooData(symbol, range, interval) {
@@ -223,21 +225,34 @@ async function fetchGoldHistory() {
   for (const cfg of configs) {
     try {
       // Altın USD verisi
-      const goldData = await fetchYahooData('GC=F', cfg.range, cfg.interval);
+      const goldRaw = await fetchYahooData('GC=F', cfg.range, cfg.interval);
       await new Promise(r => setTimeout(r, 1000));
 
       // USDTRY geçmiş verisi
       const usdtryData = await fetchYahooData('USDTRY=X', cfg.range, cfg.interval);
       await new Promise(r => setTimeout(r, 1000));
 
-      if (goldData.length > 0) {
-        // Geçmiş USDTRY ile birleştir — doğru TL hesabı
-        const merged = mergeByTime(goldData, usdtryData);
+      if (goldRaw.length > 0) {
+        const merged = mergeByTime(goldRaw, usdtryData);
         goldHistoryCache[cfg.period] = merged;
         console.log(`Altin gecmis ${cfg.period}: ${merged.length} kayit (USDTRY entegre)`);
       }
+
+      // Gümüş USD verisi (SI=F)
+      const silverRaw = await fetchYahooData('SI=F', cfg.range, cfg.interval);
+      await new Promise(r => setTimeout(r, 1000));
+
+      if (silverRaw.length > 0) {
+        // Gümüşü TL'ye çevir (her noktanın kendi USDTRY'si ile)
+        const silverMerged = mergeByTime(silverRaw, usdtryData).map(h => ({
+          time:  h.time,
+          price: Number(((h.priceUsd || h.price) * (h.usdtry || goldData.usdtry) / 31.1035).toFixed(4)),
+        }));
+        silverHistoryCache[cfg.period] = silverMerged;
+        console.log(`Gumus gecmis ${cfg.period}: ${silverMerged.length} kayit`);
+      }
     } catch (e) {
-      console.log(`Altin gecmis ${cfg.period} hata:`, e.message);
+      console.log(`Gecmis veri ${cfg.period} hata:`, e.message);
     }
   }
 }
@@ -437,24 +452,30 @@ app.get('/chart/gold/:symbol', (req, res) => {
   const multiplier = GOLD_MULTIPLIERS[symbol] || 1.0;
   const isTry = symbol !== 'XAUUSD';
 
-  // Gümüş chart
+  // Gümüş chart — silverHistoryCache kullan
   if (symbol === 'GUMUS') {
-    const silverGoldRatio = goldData.xagusd > 0 && goldData.xauusd > 0
-      ? goldData.xagusd / goldData.xauusd
-      : 0.013;
-    const data = history.map(h => ({
-      time:  h.time,
-      price: Number((((h.priceUsd || h.price) * silverGoldRatio * (h.usdtry || goldData.usdtry)) / 31.1035).toFixed(4)),
-    }));
-    return res.json(data);
+    const silverHistory = silverHistoryCache[backendPeriod] || [];
+    if (silverHistory.length === 0 && goldData.gramSilverTry > 0) {
+      const now = Math.floor(Date.now() / 1000);
+      return res.json([
+        { time: now - 3600, price: goldData.gramSilverTry },
+        { time: now,        price: goldData.gramSilverTry },
+      ]);
+    }
+    const silverData = [...silverHistory];
+    if (silverData.length > 0 && goldData.gramSilverTry > 0) {
+      silverData[silverData.length - 1] = {
+        time:  Math.floor(Date.now() / 1000),
+        price: goldData.gramSilverTry,
+      };
+    }
+    return res.json(silverData);
   }
 
   const data = history.map(h => {
     if (symbol === 'XAUUSD') {
-      // Ons USD — direkt USD fiyatı
       return { time: h.time, price: Number((h.priceUsd || h.price).toFixed(2)) };
     }
-    // TL semboller — her noktanın kendi USDTRY'si varsa onu kullan
     const usdtry = h.usdtry || goldData.usdtry;
     const usdPrice = h.priceUsd || h.price;
     return {
@@ -462,6 +483,15 @@ app.get('/chart/gold/:symbol', (req, res) => {
       price: Number(((usdPrice * usdtry) / 31.1035 * multiplier).toFixed(2)),
     };
   });
+
+  // Son noktayı anlık fiyatla override et
+  if (data.length > 0 && goldData.gramTry > 0) {
+    const now = Math.floor(Date.now() / 1000);
+    let lastPrice = goldData.gramTry * multiplier;
+    if (symbol === 'XAUUSD') lastPrice = goldData.xauusd;
+    if (symbol === 'GUMUS') lastPrice = goldData.gramSilverTry;
+    data[data.length - 1] = { time: now, price: Number(lastPrice.toFixed(2)) };
+  }
 
   res.json(data);
 });
