@@ -1133,67 +1133,68 @@ app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
 // BES FONLARI — TEFAS
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Tarih formatı: DD.MM.YYYY
+// Tarih formatı: YYYY-MM-DD
 function formatTefasDate(date) {
-  const d = date.getDate().toString().padStart(2, '0');
-  const m = (date.getMonth() + 1).toString().padStart(2, '0');
   const y = date.getFullYear();
-  return `${d}.${m}.${y}`;
+  const m = (date.getMonth() + 1).toString().padStart(2, '0');
+  const d = date.getDate().toString().padStart(2, '0');
+  return `${y}-${m}-${d}`;
 }
 
-// TEFAS'tan fon verisi çek
+// Yeni TEFAS API (2026) - GET endpoint
 async function fetchTefas(endpoint, params) {
-  const response = await axios.post(
-    `https://www.tefas.gov.tr/api/DB/${endpoint}`,
-    new URLSearchParams(params).toString(),
-    {
-      timeout: 15000,
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-        'Origin': 'https://www.tefas.gov.tr',
-        'Referer': 'https://www.tefas.gov.tr/',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-      },
-    }
-  );
+  const url = new URL(`https://www.tefas.gov.tr/api/funds/${endpoint}`);
+  Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v));
+  const response = await axios.get(url.toString(), {
+    timeout: 15000,
+    headers: {
+      'Accept': 'application/json',
+      'Origin': 'https://www.tefas.gov.tr',
+      'Referer': 'https://www.tefas.gov.tr/',
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+    },
+  });
   return response.data;
 }
 
 // GET /fund/price/:code — Fon anlık fiyat + temel bilgiler
 app.get('/fund/price/:code', async (req, res) => {
   try {
-    const code = req.params.code.toUpperCase();
+    const code  = req.params.code.toUpperCase();
     const today = new Date();
-    const startDate = new Date(today);
-    startDate.setDate(startDate.getDate() - 7); // Son 7 gün (hafta sonu hesabı için)
+    const start = new Date(today);
+    start.setDate(start.getDate() - 10);
 
-    const data = await fetchTefas('BindHistoryInfo', {
-      fontip: 'EMK',
-      fonkod: code,
-      bastarih: formatTefasDate(startDate),
-      bittarih: formatTefasDate(today),
+    const data = await fetchTefas('fonGnlBlgSiraliGetir', {
+      fonKod:   code,
+      basTarih: formatTefasDate(start),
+      bitTarih: formatTefasDate(today),
     });
 
-    if (!data?.data?.length) {
-      return res.status(404).json({ error: 'Fon bulunamadı' });
+    // Debug: ilk çağrıda response'u logla
+    if (!data) return res.status(404).json({ error: 'Veri yok', raw: null });
+    
+    console.log(`TEFAS /fund/price/${code} response keys:`, Object.keys(data).join(', '));
+
+    const items = data?.data || data?.result || data?.items || (Array.isArray(data) ? data : null);
+    if (!items || items.length === 0) {
+      return res.status(404).json({ error: 'Fon bulunamadı', raw: data });
     }
 
-    // En son veriyi al
-    const latest = data.data[data.data.length - 1];
-    const prev   = data.data.length > 1 ? data.data[data.data.length - 2] : null;
-    const price  = parseFloat(latest.FIYAT?.toString().replace(',', '.') || 0);
-    const prevPrice = prev ? parseFloat(prev.FIYAT?.toString().replace(',', '.') || price) : price;
-    const change = prevPrice > 0 ? ((price - prevPrice) / prevPrice) * 100 : 0;
+    const latest = items[items.length - 1];
+    const prev   = items.length > 1 ? items[items.length - 2] : null;
+    const price  = parseFloat(String(latest.FIYAT || latest.fiyat || latest.price || latest.nav || 0).replace(',', '.'));
+    const prevP  = prev ? parseFloat(String(prev.FIYAT || prev.fiyat || prev.price || prev.nav || price).replace(',', '.')) : price;
+    const change = prevP > 0 ? ((price - prevP) / prevP) * 100 : 0;
 
     res.json({
       code,
-      name:           latest.FONUNVAN || latest.FONADI || code,
+      name:          latest.FONUNVAN || latest.FONADI || latest.fonAdi || latest.name || code,
       price,
-      change:         Number(change.toFixed(4)),
-      date:           latest.TARIH,
-      totalValue:     parseFloat(latest.PORTFOYBUYUKLUGU?.toString().replace(',', '.') || 0),
-      investorCount:  parseInt(latest.KISISAYISI || 0),
-      shares:         parseFloat(latest.TEDAVULDEKIPAYSAYISI?.toString().replace(',', '.') || 0),
+      change:        Number(change.toFixed(4)),
+      date:          latest.TARIH || latest.tarih || latest.date,
+      totalValue:    parseFloat(String(latest.PORTFOYBUYUKLUGU || latest.portfoyBuyuklugu || latest.totalValue || 0).replace(',', '.')),
+      investorCount: parseInt(latest.KISISAYISI || latest.kisiSayisi || latest.investorCount || 0),
     });
   } catch (e) {
     console.log(`/fund/price/${req.params.code} hata:`, e.message);
@@ -1219,36 +1220,23 @@ app.get('/fund/chart/:code', async (req, res) => {
       default:   start.setMonth(start.getMonth() - 1);
     }
 
-    // TEFAS max 90 gün → büyük periyotlar için chunk'la
-    const allData = [];
-    let chunkEnd = new Date(today);
+    // Yeni TEFAS API — chunk gerekmiyor, fixed look-back destekliyor
+    const months = { '1M': 1, '3M': 3, '6M': 6, '1Y': 12, '3Y': 36, '5Y': 60 };
+    const lookback = months[period] || 1;
 
-    while (chunkEnd > start) {
-      const chunkStart = new Date(chunkEnd);
-      chunkStart.setDate(chunkStart.getDate() - 89);
-      if (chunkStart < start) chunkStart.setTime(start.getTime());
+    const data = await fetchTefas('fonGnlBlgSiraliGetir', {
+      fonKod:   code,
+      basTarih: formatTefasDate(start),
+      bitTarih: formatTefasDate(today),
+    });
 
-      try {
-        const data = await fetchTefas('BindHistoryInfo', {
-          fontip: 'EMK',
-          fonkod: code,
-          bastarih: formatTefasDate(chunkStart),
-          bittarih: formatTefasDate(chunkEnd),
-        });
-        if (data?.data?.length) allData.unshift(...data.data);
-      } catch (_) {}
+    const items = data?.data || data?.result || data?.items || (Array.isArray(data) ? data : []);
+    if (!items.length) return res.status(404).json({ error: 'Veri yok' });
 
-      chunkEnd = new Date(chunkStart);
-      chunkEnd.setDate(chunkEnd.getDate() - 1);
-      await new Promise(r => setTimeout(r, 500));
-    }
-
-    if (!allData.length) return res.status(404).json({ error: 'Veri yok' });
-
-    const chartData = allData
+    const chartData = items
       .map(item => ({
-        date:  item.TARIH,
-        price: parseFloat(item.FIYAT?.toString().replace(',', '.') || 0),
+        date:  item.TARIH || item.tarih || item.date,
+        price: parseFloat(String(item.FIYAT || item.fiyat || item.price || item.nav || 0).replace(',', '.')),
       }))
       .filter(item => item.price > 0);
 
@@ -1266,88 +1254,55 @@ app.get('/fund/allocation/:code', async (req, res) => {
     const start = new Date(today);
     start.setDate(start.getDate() - 30);
 
-    const data = await fetchTefas('BindHistoryAllocation', {
-      fontip: 'EMK',
-      fonkod: code,
-      bastarih: formatTefasDate(start),
-      bittarih: formatTefasDate(today),
+    const data = await fetchTefas('dagilimSiraliGetirT', {
+      fonKod:   code,
+      basTarih: formatTefasDate(start),
+      bitTarih: formatTefasDate(today),
     });
 
-    if (!data?.data?.length) return res.status(404).json({ error: 'Dağılım verisi yok' });
+    const items = data?.data || data?.result || data?.items || (Array.isArray(data) ? data : []);
+    if (!items.length) return res.status(404).json({ error: 'Dağılım verisi yok', raw: data });
 
-    // En son dağılım
-    const latest = data.data[data.data.length - 1];
-
-    // Tüm alanları dağılım olarak topla
+    const latest = items[items.length - 1];
+    
+    // Dağılım alanlarını topla
     const allocation = [];
-    const fields = {
-      'HISSE_SENEDI':   'Hisse Senedi',
-      'KAMU_BORÇLANMA': 'Kamu Borçlanma',
-      'OZEL_BORÇLANMA': 'Özel Borçlanma',
-      'REPO':           'Repo',
-      'TERS_REPO':      'Ters Repo',
-      'DOVIZ':          'Döviz',
-      'ALTIN':          'Altın',
-      'DIGER':          'Diğer',
-      'PARA_PIYASASI':  'Para Piyasası',
-      'VADESIZ_MEVDUAT':'Vadesi̇z Mevduat',
-      'VADELI_MEVDUAT': 'Vadeli Mevduat',
-    };
-
-    // TEFAS'tan gelen tüm alanları tara
-    Object.keys(latest).forEach(key => {
-      const val = parseFloat(latest[key]?.toString().replace(',', '.') || 0);
-      if (val > 0 && key !== 'TARIH' && key !== 'FONKODU') {
-        const label = fields[key] || key;
-        allocation.push({ key, label, value: val });
-      }
+    const skipKeys = ['TARIH', 'tarih', 'date', 'FONKODU', 'fonKodu', 'code', 'FONUNVAN'];
+    Object.entries(latest).forEach(([key, val]) => {
+      if (skipKeys.includes(key)) return;
+      const v = parseFloat(String(val || 0).replace(',', '.'));
+      if (v > 0) allocation.push({ key, label: key, value: v });
     });
-
     allocation.sort((a, b) => b.value - a.value);
 
-    res.json({
-      code,
-      date: latest.TARIH,
-      allocation,
-      raw: latest,
-    });
+    res.json({ code, date: latest.TARIH || latest.tarih, allocation, raw: latest });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
 
-// GET /fund/returns/:code — Getiri hesabı (1A, 3A, 6A, 1Y, 3Y, 5Y)
+// GET /fund/returns/:code — Getiri hesabı
 app.get('/fund/returns/:code', async (req, res) => {
   try {
     const code  = req.params.code.toUpperCase();
     const today = new Date();
     const start = new Date(today);
-    start.setFullYear(start.getFullYear() - 5); // Son 5 yıl
+    start.setFullYear(start.getFullYear() - 5);
 
-    // Chunk'lı çek
-    const allData = [];
-    let chunkEnd = new Date(today);
-    while (chunkEnd > start) {
-      const chunkStart = new Date(chunkEnd);
-      chunkStart.setDate(chunkStart.getDate() - 89);
-      if (chunkStart < start) chunkStart.setTime(start.getTime());
-      try {
-        const data = await fetchTefas('BindHistoryInfo', {
-          fontip: 'EMK', fonkod: code,
-          bastarih: formatTefasDate(chunkStart),
-          bittarih: formatTefasDate(chunkEnd),
-        });
-        if (data?.data?.length) allData.unshift(...data.data);
-      } catch (_) {}
-      chunkEnd = new Date(chunkStart);
-      chunkEnd.setDate(chunkEnd.getDate() - 1);
-      await new Promise(r => setTimeout(r, 300));
-    }
+    const data = await fetchTefas('fonGnlBlgSiraliGetir', {
+      fonKod:   code,
+      basTarih: formatTefasDate(start),
+      bitTarih: formatTefasDate(today),
+    });
 
-    if (!allData.length) return res.status(404).json({ error: 'Veri yok' });
+    const items = data?.data || data?.result || data?.items || (Array.isArray(data) ? data : []);
+    if (!items.length) return res.status(404).json({ error: 'Veri yok' });
 
-    const prices = allData
-      .map(d => ({ date: new Date(d.TARIH?.split('.').reverse().join('-')), price: parseFloat(d.FIYAT?.toString().replace(',', '.') || 0) }))
+    const prices = items
+      .map(d => ({
+        date:  new Date(d.TARIH || d.tarih || d.date),
+        price: parseFloat(String(d.FIYAT || d.fiyat || d.price || d.nav || 0).replace(',', '.')),
+      }))
       .filter(d => d.price > 0)
       .sort((a, b) => a.date - b.date);
 
@@ -1362,16 +1317,8 @@ app.get('/fund/returns/:code', async (req, res) => {
     }
 
     res.json({
-      code,
-      currentPrice: current,
-      returns: {
-        '1M':  getReturn(1),
-        '3M':  getReturn(3),
-        '6M':  getReturn(6),
-        '1Y':  getReturn(12),
-        '3Y':  getReturn(36),
-        '5Y':  getReturn(60),
-      }
+      code, currentPrice: current,
+      returns: { '1M': getReturn(1), '3M': getReturn(3), '6M': getReturn(6), '1Y': getReturn(12), '3Y': getReturn(36), '5Y': getReturn(60) }
     });
   } catch (e) {
     res.status(500).json({ error: e.message });
