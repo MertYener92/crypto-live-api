@@ -1310,9 +1310,10 @@ app.get('/fund/returns/:code', async (req, res) => {
 app.get('/fund/search', async (req, res) => {
   try {
     const q    = (req.query.q || '').toUpperCase();
-    const data = await fetchTefas('getFplFonList', { dil: 'TR' });
+    const data = await fetchTefas('getFplFonList', {});
 
-    const items = data?.resultList || data?.data || (Array.isArray(data) ? data : []);
+    console.log('getFplFonList response:', JSON.stringify(data).slice(0, 300));
+    const items = data?.resultList || data?.data || data?.fonList || (Array.isArray(data) ? data : []);
     if (!items.length) return res.json([]);
 
     const funds = items
