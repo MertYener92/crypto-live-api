@@ -127,7 +127,50 @@ async function fetchXauUsd() {
 const goldHistoryCache = {};
 let goldIntraday = []; // 1D için 5dk'lık birikmiş veri
 
-// Yahoo Finance'den altın geçmiş veri çek
+// Yahoo Finance'den altın + USDTRY geçmiş veri çek
+async function fetchYahooData(symbol, range, interval) {
+  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?interval=${interval}&range=${range}`;
+  const response = await axios.get(url, {
+    timeout: 15000,
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+      'Accept': 'application/json',
+    },
+  });
+  const result = response.data?.chart?.result?.[0];
+  if (!result) return [];
+  const timestamps = result.timestamp || [];
+  const closes = result.indicators?.quote?.[0]?.close || [];
+  return timestamps
+    .map((t, i) => ({ time: t, price: closes[i] }))
+    .filter(item => item.price && !isNaN(item.price) && item.price > 0)
+    .sort((a, b) => a.time - b.time);
+}
+
+// İki diziyi zaman damgasına göre eşleştir
+function mergeByTime(goldData, usdtryData) {
+  if (usdtryData.length === 0) return goldData;
+  // USDTRY verisini map'e al (timestamp → rate)
+  const usdtryMap = {};
+  usdtryData.forEach(item => { usdtryMap[item.time] = item.price; });
+
+  return goldData.map(item => {
+    // En yakın USDTRY verisini bul
+    let closestRate = goldData.usdtry || 45.99; // fallback
+    let minDiff = Infinity;
+    usdtryData.forEach(u => {
+      const diff = Math.abs(u.time - item.time);
+      if (diff < minDiff) { minDiff = diff; closestRate = u.price; }
+    });
+    return {
+      time: item.time,
+      priceUsd: item.price,
+      usdtry: closestRate,
+      price: Number(((item.price * closestRate) / 31.1035).toFixed(2)),
+    };
+  });
+}
+
 async function fetchGoldHistory() {
   const configs = [
     { period: '1M', range: '1mo',  interval: '1h'  },
@@ -139,30 +182,20 @@ async function fetchGoldHistory() {
 
   for (const cfg of configs) {
     try {
-      const url = `https://query1.finance.yahoo.com/v8/finance/chart/GC%3DF?interval=${cfg.interval}&range=${cfg.range}`;
-      const response = await axios.get(url, {
-        timeout: 15000,
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-          'Accept': 'application/json',
-        },
-      });
+      // Altın USD verisi
+      const goldData = await fetchYahooData('GC=F', cfg.range, cfg.interval);
+      await new Promise(r => setTimeout(r, 1000));
 
-      const result = response.data?.chart?.result?.[0];
-      if (result) {
-        const timestamps = result.timestamp || [];
-        const closes = result.indicators?.quote?.[0]?.close || [];
-        const data = timestamps
-          .map((t, i) => ({ time: t, price: closes[i] }))
-          .filter(item => item.price && !isNaN(item.price) && item.price > 0)
-          .sort((a, b) => a.time - b.time);
+      // USDTRY geçmiş verisi
+      const usdtryData = await fetchYahooData('USDTRY=X', cfg.range, cfg.interval);
+      await new Promise(r => setTimeout(r, 1000));
 
-        if (data.length > 0) {
-          goldHistoryCache[cfg.period] = data;
-          console.log(`Altin gecmis ${cfg.period}: ${data.length} kayit`);
-        }
+      if (goldData.length > 0) {
+        // Geçmiş USDTRY ile birleştir — doğru TL hesabı
+        const merged = mergeByTime(goldData, usdtryData);
+        goldHistoryCache[cfg.period] = merged;
+        console.log(`Altin gecmis ${cfg.period}: ${merged.length} kayit (USDTRY entegre)`);
       }
-      await new Promise(r => setTimeout(r, 1000)); // Rate limit için bekle
     } catch (e) {
       console.log(`Altin gecmis ${cfg.period} hata:`, e.message);
     }
@@ -462,17 +495,24 @@ app.get('/chart/gold/:symbol', (req, res) => {
       : 0.013;
     const data = history.map(h => ({
       time:  h.time,
-      price: Number(((h.price * silverGoldRatio * goldData.usdtry) / 31.1035).toFixed(4)),
+      price: Number((((h.priceUsd || h.price) * silverGoldRatio * (h.usdtry || goldData.usdtry)) / 31.1035).toFixed(4)),
     }));
     return res.json(data);
   }
 
-  const data = history.map(h => ({
-    time:  h.time,
-    price: isTry
-      ? Number(((h.price * goldData.usdtry) / 31.1035 * multiplier).toFixed(2))
-      : Number(h.price.toFixed(2)),
-  }));
+  const data = history.map(h => {
+    if (symbol === 'XAUUSD') {
+      // Ons USD — direkt USD fiyatı
+      return { time: h.time, price: Number((h.priceUsd || h.price).toFixed(2)) };
+    }
+    // TL semboller — her noktanın kendi USDTRY'si varsa onu kullan
+    const usdtry = h.usdtry || goldData.usdtry;
+    const usdPrice = h.priceUsd || h.price;
+    return {
+      time:  h.time,
+      price: Number(((usdPrice * usdtry) / 31.1035 * multiplier).toFixed(2)),
+    };
+  });
 
   res.json(data);
 });
