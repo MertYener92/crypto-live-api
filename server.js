@@ -2,18 +2,18 @@ const express = require('express');
 const WebSocket = require('ws').WebSocket;
 const cors = require('cors');
 const axios = require('axios');
- 
+
 const app = express();
 app.use(cors());
- 
+
 const PORT = process.env.PORT || 10000;
- 
+
 const SUPABASE_URL = 'https://edmvkecnitzueryzylpo.supabase.co';
 const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVkbXZrZWNuaXR6dWVyeXp5bHBvIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3OTYwNzg5OSwiZXhwIjoyMDk1MTgzODk5fQ.HQpDHbG1N-oEyvDOJFXH5yO3tpG9s-9_meeqLOkmM3k';
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || '';
 const GOLD_API_KEY = process.env.GOLD_API_KEY || '';
 const METALS_API_KEY = process.env.METALS_API_KEY || '';
- 
+
 let prices = {};
 let orderedSymbols = [];
 let coinMetadata = {};
@@ -21,7 +21,7 @@ let coinStats = {};
 let totalMarketCap = 0;
 let ws = null;
 const sparklineCache = {};
- 
+
 // ─────────────────────────────────────────────────────────────────────────────
 // ALTIN — Truncgil v3 (canlı fiyat) + metals.dev (geçmiş veri)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -41,7 +41,7 @@ let goldData = {
   high24hTry: 0,
   low24hTry: 0,
 };
- 
+
 async function fetchUsdTry() {
   try {
     const response = await axios.get(
@@ -62,9 +62,9 @@ async function fetchUsdTry() {
     console.log('TCMB USDTRY hata:', e.message);
   }
 }
- 
+
 let sarrafiyeData = {};
- 
+
 async function fetchXauUsd() {
   try {
     const response = await axios.get(
@@ -72,7 +72,7 @@ async function fetchXauUsd() {
       { timeout: 10000 }
     );
     const data = response.data;
- 
+
     const parsePrice = (val) => {
       if (!val) return 0;
       return parseFloat(String(val).replace(/\./g, '').replace(',', '.').replace('$', '').trim()) || 0;
@@ -81,7 +81,7 @@ async function fetchXauUsd() {
       if (!val) return 0;
       return parseFloat(String(val).replace('%', '').replace(',', '.').trim()) || 0;
     };
- 
+
     const gramSell   = parsePrice(data['gram-altin']?.Selling);
     const gramChange = parseChange(data['gram-altin']?.Change);
     if (gramSell > 0) {
@@ -97,7 +97,7 @@ async function fetchXauUsd() {
       }
       console.log('Altin (Truncgil v3): ' + gramSell + ' TL/gram | Degisim: ' + gramChange + '%');
     }
- 
+
     const gumusSell   = parsePrice(data['gumus']?.Selling);
     const gumusChange = parseChange(data['gumus']?.Change);
     if (gumusSell > 0) {
@@ -105,7 +105,7 @@ async function fetchXauUsd() {
       goldData.silverChange  = gumusChange;
       console.log('Gumus (Truncgil v3): ' + gumusSell + ' TL/gram');
     }
- 
+
     const sarrafiyeKeys = {
       'ceyrek-altin':      'CEYREK_YENI',
       'yarim-altin':       'YARIM_YENI',
@@ -122,7 +122,7 @@ async function fetchXauUsd() {
       const change = parseChange(data[key]?.Change);
       if (sell > 0) sarrafiyeData[symbol] = { symbol, price: sell, bid: buy, change };
     });
- 
+
     console.log('Sarrafiye: Ceyrek=' + (sarrafiyeData.CEYREK_YENI?.price || 0) + ' Tam=' + (sarrafiyeData.TEK_YENI?.price || 0));
   } catch (e) {
     console.log('Truncgil v3 hata:', e.message, '— fallback...');
@@ -145,7 +145,7 @@ async function fetchXauUsd() {
     }
   }
 }
- 
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Altın geçmiş veri — metals.dev (Yahoo yerine)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -157,78 +157,80 @@ let goldIntraday    = [];
 let silverIntraday  = [];
 let platinIntraday  = [];
 let paladyumIntraday = [];
- 
+
 function fmtDate(d) {
   return d.toISOString().split('T')[0];
 }
- 
+
 // metals.dev timeseries — TRY bazında direkt gram fiyat
 async function fetchMetalsHistory(startDate, endDate) {
-  const response = await axios.get('https://metals-api.com/api/timeseries', {
+  const response = await axios.get('https://api.metals.dev/v1/timeseries', {
     params: {
-      access_key: METALS_API_KEY,
-      base: 'TRY',
+      api_key: METALS_API_KEY,
+      currency: 'TRY',
       symbols: 'XAU,XAG,XPT,XPD',
       start_date: startDate,
       end_date: endDate,
     },
     timeout: 20000,
   });
- 
+
   if (!response.data?.success) {
-    throw new Error(`metals.dev hata: ${JSON.stringify(response.data?.error)}`);
+    throw new Error(`metals.dev hata: ${JSON.stringify(response.data?.error || response.data)}`);
   }
- 
-  // rates: { '2024-01-01': { XAU: 0.000005, ... } }
-  // 1 TRY = XAU ons  →  gram TRY = 1/XAU/31.1035
+
+  // metals.dev rates format:
+  // { "2023-09-24": { "XAU": 1850.5, "XAG": 23.1, ... }, ... }
+  // Değerler: 1 birim metal'in TRY cinsinden fiyatı (ons bazında)
+  // Gram TRY = ons_fiyat / 31.1035
   const rates = response.data.rates;
   const result = { gold: [], silver: [], platin: [], paladyum: [] };
- 
+
   Object.entries(rates)
     .sort(([a], [b]) => a.localeCompare(b))
     .forEach(([dateStr, metals]) => {
       const ts = Math.floor(new Date(dateStr).getTime() / 1000);
-      if (metals.XAU > 0) result.gold.push(    { time: ts, price: Number((1 / metals.XAU / 31.1035).toFixed(2))  });
-      if (metals.XAG > 0) result.silver.push(  { time: ts, price: Number((1 / metals.XAG / 31.1035).toFixed(4))  });
-      if (metals.XPT > 0) result.platin.push(  { time: ts, price: Number((1 / metals.XPT / 31.1035).toFixed(2))  });
-      if (metals.XPD > 0) result.paladyum.push({ time: ts, price: Number((1 / metals.XPD / 31.1035).toFixed(2))  });
+      if (metals.XAU > 0) result.gold.push(    { time: ts, price: Number((metals.XAU / 31.1035).toFixed(2))  });
+      if (metals.XAG > 0) result.silver.push(  { time: ts, price: Number((metals.XAG / 31.1035).toFixed(4))  });
+      if (metals.XPT > 0) result.platin.push(  { time: ts, price: Number((metals.XPT / 31.1035).toFixed(2))  });
+      if (metals.XPD > 0) result.paladyum.push({ time: ts, price: Number((metals.XPD / 31.1035).toFixed(2))  });
     });
- 
+
   return result;
 }
- 
+
 async function fetchGoldHistory() {
   if (!METALS_API_KEY) {
     console.log('METALS_API_KEY yok — Yahoo fallback');
     return fetchGoldHistoryYahoo();
   }
- 
+
   try {
     const today  = new Date();
     const mid    = new Date(); mid.setDate(mid.getDate() - 365);
     const start5Y = new Date(); start5Y.setDate(start5Y.getDate() - 1825);
- 
+
     console.log('metals.dev: part1 çekiliyor (4-5Y)...');
     const part1 = await fetchMetalsHistory(fmtDate(start5Y), fmtDate(mid));
     await new Promise(r => setTimeout(r, 2000));
- 
+
     console.log('metals.dev: part2 çekiliyor (0-1Y)...');
     const part2 = await fetchMetalsHistory(fmtDate(mid), fmtDate(today));
     await new Promise(r => setTimeout(r, 1000));
- 
+
     const merge = (a, b) => {
       const map = {};
       [...a, ...b].forEach(p => { map[p.time] = p; });
       return Object.values(map).sort((x, y) => x.time - y.time);
     };
- 
+
     const fullGold     = merge(part1.gold,     part2.gold);
     const fullSilver   = merge(part1.silver,   part2.silver);
     const fullPlatin   = merge(part1.platin,   part2.platin);
     const fullPaladyum = merge(part1.paladyum, part2.paladyum);
- 
+
     console.log(`metals.dev toplam: altın=${fullGold.length} gümüş=${fullSilver.length} platin=${fullPlatin.length} paladyum=${fullPaladyum.length}`);
- 
+
     const now = Math.floor(Date.now() / 1000);
     const periods = [
       { period: '1M', days: 30   },
@@ -237,7 +239,7 @@ async function fetchGoldHistory() {
       { period: '1Y', days: 365  },
       { period: '5Y', days: 1825 },
     ];
- 
+
     periods.forEach(({ period, days }) => {
       const cutoff = now - days * 24 * 60 * 60;
       goldHistoryCache[period]     = fullGold.filter(p => p.time >= cutoff);
@@ -246,13 +248,13 @@ async function fetchGoldHistory() {
       paladyumHistoryCache[period] = fullPaladyum.filter(p => p.time >= cutoff);
       console.log(`  ${period}: altın=${goldHistoryCache[period].length} kayıt`);
     });
- 
+
   } catch (e) {
     console.log('metals.dev hata, Yahoo fallback:', e.message);
     await fetchGoldHistoryYahoo();
   }
 }
- 
+
 // Yahoo fallback — metals.dev başarısız olursa
 async function fetchYahooData(symbol, range, interval) {
   const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?interval=${interval}&range=${range}`;
@@ -272,7 +274,7 @@ async function fetchYahooData(symbol, range, interval) {
     .filter(item => item.price && !isNaN(item.price) && item.price > 0)
     .sort((a, b) => a.time - b.time);
 }
- 
+
 function mergeByTime(goldRaw, usdtryData) {
   if (usdtryData.length === 0) return goldRaw;
   return goldRaw.map(item => {
@@ -290,7 +292,7 @@ function mergeByTime(goldRaw, usdtryData) {
     };
   });
 }
- 
+
 async function fetchGoldHistoryYahoo() {
   const configs = [
     { period: '1M', range: '1mo',  interval: '1h'  },
@@ -336,12 +338,12 @@ async function fetchGoldHistoryYahoo() {
     }
   }
 }
- 
+
 // 1G için intraday veriyi biriktir (5dk'da bir çağrılır)
 function appendGoldHistory() {
   const now    = Math.floor(Date.now() / 1000);
   const cutoff = now - 24 * 60 * 60;
- 
+
   if (goldData.gramTry > 0) {
     goldIntraday.push({ time: now, price: goldData.gramTry });
     goldIntraday = goldIntraday.filter(h => h.time >= cutoff);
@@ -359,7 +361,7 @@ function appendGoldHistory() {
     paladyumIntraday = paladyumIntraday.filter(h => h.time >= cutoff);
   }
 }
- 
+
 function getGoldHistory(period) {
   if (period === '1D') {
     if (goldIntraday.length > 0) return goldIntraday;
@@ -374,11 +376,11 @@ function getGoldHistory(period) {
   }
   return goldHistoryCache[period] || [];
 }
- 
+
 async function updateGoldData() {
   await fetchXauUsd();
 }
- 
+
 const GOLD_MULTIPLIERS = {
   CEYREK_YENI: 1.75,
   YARIM_YENI:  3.50,
@@ -387,7 +389,7 @@ const GOLD_MULTIPLIERS = {
   ATA_ALTIN:   7.20,
   RESAT_ALTIN: 7.20,
 };
- 
+
 // ─────────────────────────────────────────────────────────────────────────────
 // GET /gold-prices
 // ─────────────────────────────────────────────────────────────────────────────
@@ -396,7 +398,7 @@ app.get('/gold-prices', (req, res) => {
   const getCeyrek = () => sarrafiyeData.CEYREK_YENI?.price || Number((gramTry * 1.75).toFixed(2));
   const getYarim  = () => sarrafiyeData.YARIM_YENI?.price  || Number((gramTry * 3.50).toFixed(2));
   const getTam    = () => sarrafiyeData.TEK_YENI?.price    || Number((gramTry * 7.00).toFixed(2));
- 
+
   res.json({
     ALTIN: {
       symbol: 'ALTIN', name: 'Gram Altın',
@@ -466,14 +468,14 @@ app.get('/gold-prices', (req, res) => {
     },
   });
 });
- 
+
 // ─────────────────────────────────────────────────────────────────────────────
 // GET /chart/gold/:symbol
 // ─────────────────────────────────────────────────────────────────────────────
 app.get('/chart/gold/:symbol', (req, res) => {
   const symbol       = req.params.symbol.toUpperCase();
   const backendPeriod = req.query.period || '1D';
- 
+
   // Platin
   if (symbol === 'PLATIN') {
     const h = backendPeriod === '1D' ? platinIntraday : (platinHistoryCache[backendPeriod] || []);
@@ -487,7 +489,7 @@ app.get('/chart/gold/:symbol', (req, res) => {
       data[data.length - 1] = { time: Math.floor(Date.now() / 1000), price: sarrafiyeData.PLATIN.price };
     return res.json(data);
   }
- 
+
   // Paladyum
   if (symbol === 'PALADYUM') {
     const h = backendPeriod === '1D' ? paladyumIntraday : (paladyumHistoryCache[backendPeriod] || []);
@@ -501,7 +503,7 @@ app.get('/chart/gold/:symbol', (req, res) => {
       data[data.length - 1] = { time: Math.floor(Date.now() / 1000), price: sarrafiyeData.PALADYUM.price };
     return res.json(data);
   }
- 
+
   // Gümüş
   if (symbol === 'GUMUS') {
     const h = backendPeriod === '1D' ? silverIntraday : (silverHistoryCache[backendPeriod] || []);
@@ -514,11 +516,11 @@ app.get('/chart/gold/:symbol', (req, res) => {
       data[data.length - 1] = { time: Math.floor(Date.now() / 1000), price: goldData.gramSilverTry };
     return res.json(data);
   }
- 
+
   // Altın + türevleri
   const history    = getGoldHistory(backendPeriod);
   const multiplier = GOLD_MULTIPLIERS[symbol] || 1.0;
- 
+
   if (history.length === 0) {
     if (goldData.gramTry > 0) {
       const now = Math.floor(Date.now() / 1000);
@@ -526,22 +528,22 @@ app.get('/chart/gold/:symbol', (req, res) => {
     }
     return res.status(404).json({ error: 'Veri henüz yüklenmedi' });
   }
- 
+
   const data = history.map(h => {
     if (symbol === 'XAUUSD') return { time: h.time, price: Number((h.priceUsd || h.price).toFixed(2)) };
     return { time: h.time, price: Number((h.price * multiplier).toFixed(2)) };
   });
- 
+
   // Son noktayı anlık fiyatla override et
   if (data.length > 0 && goldData.gramTry > 0) {
     const now      = Math.floor(Date.now() / 1000);
     const lastPrice = symbol === 'XAUUSD' ? goldData.xauusd : goldData.gramTry * multiplier;
     data[data.length - 1] = { time: now, price: Number(lastPrice.toFixed(2)) };
   }
- 
+
   res.json(data);
 });
- 
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Supabase
 // ─────────────────────────────────────────────────────────────────────────────
@@ -569,7 +571,7 @@ async function loadMetadataFromSupabase() {
     return false;
   }
 }
- 
+
 async function saveMetadataToSupabase(data) {
   try {
     for (const coin of data) {
@@ -584,7 +586,7 @@ async function saveMetadataToSupabase(data) {
     console.log('Supabase guncelleme hatasi:', e.message);
   }
 }
- 
+
 async function fetchAndSaveCoinGeckoMetadata(symbols) {
   const symbolSet = new Set(symbols);
   const collected = [];
@@ -630,7 +632,7 @@ async function fetchAndSaveCoinGeckoMetadata(symbols) {
     console.log(`Toplam ${collected.length} coin metadata guncellendi`);
   }
 }
- 
+
 async function loadCoinbaseSymbols() {
   const response = await axios.get('https://api.exchange.coinbase.com/products', { timeout: 10000 });
   const symbols = response.data
@@ -639,7 +641,7 @@ async function loadCoinbaseSymbols() {
   console.log(`Coinbase: ${symbols.length} aktif USD coini`);
   return symbols;
 }
- 
+
 async function loadCoinStats() {
   for (const symbol of orderedSymbols) {
     try {
@@ -656,7 +658,7 @@ async function loadCoinStats() {
   }
   console.log('Coin stats yuklendi');
 }
- 
+
 async function loadSparklines() {
   let loaded = 0;
   for (const symbol of orderedSymbols) {
@@ -676,7 +678,7 @@ async function loadSparklines() {
   }
   console.log(`Sparklines yuklendi: ${loaded}/${orderedSymbols.length}`);
 }
- 
+
 async function loadGlobalStats() {
   try {
     const response = await axios.get('https://api.coinlore.net/api/global/', { timeout: 5000 });
@@ -686,7 +688,7 @@ async function loadGlobalStats() {
     console.log('Global Stats Error:', e.message);
   }
 }
- 
+
 function startWebSocket() {
   if (ws) ws.close();
   ws = new WebSocket('wss://ws-feed.exchange.coinbase.com', { perMessageDeflate: false });
@@ -725,7 +727,7 @@ function startWebSocket() {
     setTimeout(() => startWebSocket(), 3000);
   });
 }
- 
+
 async function translateWithClaude(englishText, coinName) {
   if (!ANTHROPIC_API_KEY) return null;
   const cleanText = englishText.replace(/<[^>]*>/g, '').trim();
@@ -746,7 +748,7 @@ async function translateWithClaude(englishText, coinName) {
     return null;
   }
 }
- 
+
 app.get('/coin-info/:symbol', async (req, res) => {
   const symbol = req.params.symbol.toUpperCase();
   try {
@@ -782,7 +784,7 @@ app.get('/coin-info/:symbol', async (req, res) => {
     res.status(500).json({ symbol, description_tr: null, source: 'error' });
   }
 });
- 
+
 const logoCache = {};
 app.get('/logo/:symbol', async (req, res) => {
   const symbol = req.params.symbol.toUpperCase();
@@ -804,7 +806,7 @@ app.get('/logo/:symbol', async (req, res) => {
     res.status(500).send('Logo fetch failed');
   }
 });
- 
+
 app.get('/prices', (req, res) => {
   const result = {};
   orderedSymbols.forEach(symbol => {
@@ -814,7 +816,7 @@ app.get('/prices', (req, res) => {
   });
   res.json(result);
 });
- 
+
 function getChartConfig(period) {
   switch (period) {
     case '1D': return { days: 1,    granularity: 3600  };
@@ -826,7 +828,7 @@ function getChartConfig(period) {
     default:   return { days: 1,    granularity: 3600  };
   }
 }
- 
+
 async function fetchCandles(symbol, startMs, endMs, granularity) {
   const maxCandles = 300;
   const windowMs   = granularity * maxCandles * 1000;
@@ -851,12 +853,12 @@ async function fetchCandles(symbol, startMs, endMs, granularity) {
   }
   return allCandles;
 }
- 
+
 const GOLD_SYMBOLS = new Set([
   'ALTIN','XAUUSD','CEYREK_YENI','YARIM_YENI','TEK_YENI',
   'CUM_ALTIN','ATA_ALTIN','RESAT_ALTIN','GUMUS','PLATIN','PALADYUM',
 ]);
- 
+
 app.get('/chart/:symbol', async (req, res) => {
   try {
     const symbol = req.params.symbol.toUpperCase();
@@ -887,10 +889,10 @@ app.get('/chart/:symbol', async (req, res) => {
     res.status(500).json({ error: e.message });
   }
 });
- 
+
 let fngCache = null;
 let fngLastFetch = 0;
- 
+
 app.get('/fng', async (req, res) => {
   try {
     const now = Date.now();
@@ -905,7 +907,7 @@ app.get('/fng', async (req, res) => {
     res.status(500).json({ error: e.message });
   }
 });
- 
+
 let prefetchRunning = false;
 app.get('/prefetch-descriptions', async (req, res) => {
   if (prefetchRunning) return res.json({ status: 'already_running' });
@@ -951,7 +953,7 @@ app.get('/prefetch-descriptions', async (req, res) => {
     console.log(`Prefetch tamamlandı: ${success} başarılı, ${failed} başarısız`);
   })();
 });
- 
+
 // ─────────────────────────────────────────────────────────────────────────────
 // BES FONLARI — TEFAS
 // ─────────────────────────────────────────────────────────────────────────────
@@ -961,7 +963,7 @@ function formatTefasDate(date) {
   const d = date.getDate().toString().padStart(2, '0');
   return `${y}-${m}-${d}`;
 }
- 
+
 async function fetchTefas(endpoint, params) {
   const response = await axios.post(
     `https://www.tefas.gov.tr/api/funds/${endpoint}`,
@@ -980,7 +982,7 @@ async function fetchTefas(endpoint, params) {
   );
   return response.data;
 }
- 
+
 app.get('/fund/price/:code', async (req, res) => {
   try {
     const code = req.params.code.toUpperCase();
@@ -1006,7 +1008,7 @@ app.get('/fund/price/:code', async (req, res) => {
     res.status(500).json({ error: e.message });
   }
 });
- 
+
 app.get('/fund/chart/:code', async (req, res) => {
   try {
     const code    = req.params.code.toUpperCase();
@@ -1028,7 +1030,7 @@ app.get('/fund/chart/:code', async (req, res) => {
     res.status(500).json({ error: e.message });
   }
 });
- 
+
 app.get('/fund/comparison/:code', async (req, res) => {
   try {
     const code    = req.params.code.toUpperCase();
@@ -1047,7 +1049,7 @@ app.get('/fund/comparison/:code', async (req, res) => {
     res.status(500).json({ error: e.message });
   }
 });
- 
+
 app.get('/fund/returns/:code', async (req, res) => {
   try {
     const code = req.params.code.toUpperCase();
@@ -1073,7 +1075,7 @@ app.get('/fund/returns/:code', async (req, res) => {
     res.status(500).json({ error: e.message });
   }
 });
- 
+
 app.get('/fund/sync', async (req, res) => {
   res.json({ status: 'started - check logs' });
   try {
@@ -1104,7 +1106,7 @@ app.get('/fund/sync', async (req, res) => {
     console.log('Fund sync hata:', e.message);
   }
 });
- 
+
 app.get('/fund/search', async (req, res) => {
   try {
     const q = (req.query.q || '').toUpperCase();
@@ -1131,7 +1133,7 @@ app.get('/fund/search', async (req, res) => {
     res.status(500).json({ error: e.message });
   }
 });
- 
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Initialize
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1139,52 +1141,52 @@ async function initialize() {
   try {
     const symbols = await loadCoinbaseSymbols();
     orderedSymbols = symbols;
- 
+
     const hasCache = await loadMetadataFromSupabase();
     orderedSymbols.sort((a, b) => (coinMetadata[a]?.rank || 9999) - (coinMetadata[b]?.rank || 9999));
- 
+
     await loadGlobalStats();
     startWebSocket();
     loadCoinStats();
- 
+
     // Altın canlı fiyat
     await updateGoldData();
     appendGoldHistory();
- 
+
     // metals.dev geçmiş veri — arka planda
     fetchGoldHistory().then(() => {
       console.log('Altın geçmiş veri tamamlandı (metals.dev)');
     });
- 
+
     // 2 dakikada bir canlı altın fiyatı güncelle
     setInterval(async () => {
       await updateGoldData();
       appendGoldHistory();
     }, 2 * 60 * 1000);
- 
+
     // Saatte bir geçmiş veriyi güncelle (metals.dev günlük 2 istek = 48/gün → OK)
     setInterval(() => fetchGoldHistory(), 60 * 60 * 1000);
- 
+
     setTimeout(() => {
       loadSparklines();
       setInterval(() => loadSparklines(), 1800000);
     }, 120000);
- 
+
     const geckoDelay = hasCache ? 300000 : 60000;
     setTimeout(() => {
       fetchAndSaveCoinGeckoMetadata(symbols);
       setInterval(() => fetchAndSaveCoinGeckoMetadata(symbols), 21600000);
     }, geckoDelay);
- 
+
     setInterval(() => loadCoinStats(),   300000);
     setInterval(() => loadGlobalStats(), 300000);
- 
+
     console.log(`Sunucu hazir, ${orderedSymbols.length} coin yuklendi`);
   } catch (e) {
     console.log('Initialize Error:', e.message);
     setTimeout(() => initialize(), 10000);
   }
 }
- 
+
 initialize();
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
