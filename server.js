@@ -158,186 +158,183 @@ let silverIntraday  = [];
 let platinIntraday  = [];
 let paladyumIntraday = [];
 
+const METALPRICE_API_KEY = process.env.METALPRICE_API_KEY || '';
+
 function fmtDate(d) {
   return d.toISOString().split('T')[0];
 }
 
-// metals.dev timeseries — TRY bazında direkt gram fiyat
-async function fetchMetalsHistory(startDate, endDate) {
-  const response = await axios.get('https://api.metals.dev/v1/timeseries', {
+// ─────────────────────────────────────────────────────────────────────────────
+// metalpriceapi.com — TRY bazında, Supabase'e kaydeder
+// ─────────────────────────────────────────────────────────────────────────────
+async function fetchMetalpriceRange(symbol, startDate, endDate) {
+  const response = await axios.get('https://api.metalpriceapi.com/v1/timeframe', {
     params: {
-      api_key: METALS_API_KEY,
-      currency: 'TRY',
-      symbols: 'XAU,XAG,XPT,XPD',
+      api_key: METALPRICE_API_KEY,
       start_date: startDate,
       end_date: endDate,
+      base: 'TRY',
+      currencies: symbol,
     },
     timeout: 20000,
   });
-
   if (!response.data?.success) {
-    throw new Error(`metals.dev hata: ${JSON.stringify(response.data?.error || response.data)}`);
+    throw new Error(`metalpriceapi (${symbol}): ${JSON.stringify(response.data?.error)}`);
   }
-
-  // metals.dev rates format:
-  // { "2023-09-24": { "XAU": 1850.5, "XAG": 23.1, ... }, ... }
-  // Değerler: 1 birim metal'in TRY cinsinden fiyatı (ons bazında)
-  // Gram TRY = ons_fiyat / 31.1035
   const rates = response.data.rates;
-  const result = { gold: [], silver: [], platin: [], paladyum: [] };
-
+  const result = [];
   Object.entries(rates)
     .sort(([a], [b]) => a.localeCompare(b))
-    .forEach(([dateStr, metals]) => {
-      const ts = Math.floor(new Date(dateStr).getTime() / 1000);
-      if (metals.XAU > 0) result.gold.push(    { time: ts, price: Number((metals.XAU / 31.1035).toFixed(2))  });
-      if (metals.XAG > 0) result.silver.push(  { time: ts, price: Number((metals.XAG / 31.1035).toFixed(4))  });
-      if (metals.XPT > 0) result.platin.push(  { time: ts, price: Number((metals.XPT / 31.1035).toFixed(2))  });
-      if (metals.XPD > 0) result.paladyum.push({ time: ts, price: Number((metals.XPD / 31.1035).toFixed(2))  });
+    .forEach(([dateStr, vals]) => {
+      const ts   = Math.floor(new Date(dateStr).getTime() / 1000);
+      const rate = vals[symbol];
+      if (rate && rate > 0) {
+        // base=TRY: rate = 1 TRY kaç ons XAU → gram TRY = 1/rate/31.1035
+        const gramTry = Number((1 / rate / 31.1035).toFixed(symbol === 'XAG' ? 4 : 2));
+        result.push({ date: dateStr, time: ts, price: gramTry });
+      }
     });
-
   return result;
 }
 
-async function fetchGoldHistory() {
-  if (!METALS_API_KEY) {
-    console.log('METALS_API_KEY yok — Yahoo fallback');
-    return fetchGoldHistoryYahoo();
-  }
-
+async function saveToSupabase(rows) {
+  if (!rows.length) return;
   try {
-    const today  = new Date();
-    const mid    = new Date(); mid.setDate(mid.getDate() - 365);
-    const start5Y = new Date(); start5Y.setDate(start5Y.getDate() - 1825);
-
-    console.log('metals.dev: part1 çekiliyor (4-5Y)...');
-    const part1 = await fetchMetalsHistory(fmtDate(start5Y), fmtDate(mid));
-    await new Promise(r => setTimeout(r, 2000));
-
-    console.log('metals.dev: part2 çekiliyor (0-1Y)...');
-    const part2 = await fetchMetalsHistory(fmtDate(mid), fmtDate(today));
-    await new Promise(r => setTimeout(r, 1000));
-
-    const merge = (a, b) => {
-      const map = {};
-      [...a, ...b].forEach(p => { map[p.time] = p; });
-      return Object.values(map).sort((x, y) => x.time - y.time);
-    };
-
-    const fullGold     = merge(part1.gold,     part2.gold);
-    const fullSilver   = merge(part1.silver,   part2.silver);
-    const fullPlatin   = merge(part1.platin,   part2.platin);
-    const fullPaladyum = merge(part1.paladyum, part2.paladyum);
-
-    console.log(`metals.dev toplam: altın=${fullGold.length} gümüş=${fullSilver.length} platin=${fullPlatin.length} paladyum=${fullPaladyum.length}`);
-
-    const now = Math.floor(Date.now() / 1000);
-    const periods = [
-      { period: '1M', days: 30   },
-      { period: '3M', days: 90   },
-      { period: '6M', days: 180  },
-      { period: '1Y', days: 365  },
-      { period: '5Y', days: 1825 },
-    ];
-
-    periods.forEach(({ period, days }) => {
-      const cutoff = now - days * 24 * 60 * 60;
-      goldHistoryCache[period]     = fullGold.filter(p => p.time >= cutoff);
-      silverHistoryCache[period]   = fullSilver.filter(p => p.time >= cutoff);
-      platinHistoryCache[period]   = fullPlatin.filter(p => p.time >= cutoff);
-      paladyumHistoryCache[period] = fullPaladyum.filter(p => p.time >= cutoff);
-      console.log(`  ${period}: altın=${goldHistoryCache[period].length} kayıt`);
-    });
-
+    await axios.post(
+      `${SUPABASE_URL}/rest/v1/gold_price_history`,
+      rows,
+      {
+        headers: {
+          apikey: SUPABASE_KEY,
+          Authorization: `Bearer ${SUPABASE_KEY}`,
+          'Content-Type': 'application/json',
+          Prefer: 'resolution=ignore-duplicates',
+        },
+        timeout: 15000,
+      }
+    );
+    console.log(`Supabase: ${rows.length} kayıt eklendi`);
   } catch (e) {
-    console.log('metals.dev hata, Yahoo fallback:', e.message);
-    await fetchGoldHistoryYahoo();
+    console.log('Supabase kayıt hata:', e.message);
   }
 }
 
-// Yahoo fallback — metals.dev başarısız olursa
-async function fetchYahooData(symbol, range, interval) {
-  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?interval=${interval}&range=${range}`;
-  const response = await axios.get(url, {
-    timeout: 15000,
-    headers: {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-      'Accept': 'application/json',
-    },
-  });
-  const result = response.data?.chart?.result?.[0];
-  if (!result) return [];
-  const timestamps = result.timestamp || [];
-  const closes = result.indicators?.quote?.[0]?.close || [];
-  return timestamps
-    .map((t, i) => ({ time: t, price: closes[i] }))
-    .filter(item => item.price && !isNaN(item.price) && item.price > 0)
-    .sort((a, b) => a.time - b.time);
+async function loadFromSupabase(symbol) {
+  try {
+    const response = await axios.get(
+      `${SUPABASE_URL}/rest/v1/gold_price_history?select=date,price_try&symbol=eq.${symbol}&order=date.asc`,
+      { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` }, timeout: 10000 }
+    );
+    return (response.data || []).map(row => ({
+      date:  row.date,
+      time:  Math.floor(new Date(row.date).getTime() / 1000),
+      price: parseFloat(row.price_try),
+    }));
+  } catch (e) {
+    console.log(`Supabase okuma hata (${symbol}):`, e.message);
+    return [];
+  }
 }
 
-function mergeByTime(goldRaw, usdtryData) {
-  if (usdtryData.length === 0) return goldRaw;
-  return goldRaw.map(item => {
-    let closestRate = goldData.usdtry || 45.99;
-    let minDiff = Infinity;
-    usdtryData.forEach(u => {
-      const diff = Math.abs(u.time - item.time);
-      if (diff < minDiff) { minDiff = diff; closestRate = u.price; }
-    });
-    return {
-      time: item.time,
-      priceUsd: item.price,
-      usdtry: closestRate,
-      price: Number(((item.price * closestRate) / 31.1035).toFixed(2)),
-    };
+async function getLastSupabaseDate(symbol) {
+  try {
+    const response = await axios.get(
+      `${SUPABASE_URL}/rest/v1/gold_price_history?select=date&symbol=eq.${symbol}&order=date.desc&limit=1`,
+      { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` }, timeout: 5000 }
+    );
+    return response.data?.[0]?.date || null;
+  } catch (e) { return null; }
+}
+
+function buildCacheFromData(data, cacheObj) {
+  const now = Math.floor(Date.now() / 1000);
+  [
+    { period: '1M', days: 30   },
+    { period: '3M', days: 90   },
+    { period: '6M', days: 180  },
+    { period: '1Y', days: 365  },
+    { period: '5Y', days: 1825 },
+  ].forEach(({ period, days }) => {
+    const cutoff = now - days * 24 * 60 * 60;
+    cacheObj[period] = data.filter(p => p.time >= cutoff);
   });
 }
 
-async function fetchGoldHistoryYahoo() {
-  const configs = [
-    { period: '1M', range: '1mo',  interval: '1h'  },
-    { period: '3M', range: '3mo',  interval: '1d'  },
-    { period: '6M', range: '6mo',  interval: '1d'  },
-    { period: '1Y', range: '1y',   interval: '1d'  },
-    { period: '5Y', range: '5y',   interval: '1wk' },
+async function fetchGoldHistory() {
+  const symbols = [
+    { api: 'XAU', cache: goldHistoryCache     },
+    { api: 'XAG', cache: silverHistoryCache   },
+    { api: 'XPT', cache: platinHistoryCache   },
+    { api: 'XPD', cache: paladyumHistoryCache },
   ];
-  for (const cfg of configs) {
+
+  for (const sym of symbols) {
     try {
-      const goldRaw    = await fetchYahooData('GC=F',     cfg.range, cfg.interval);
-      await new Promise(r => setTimeout(r, 1000));
-      const usdtryData = await fetchYahooData('USDTRY=X', cfg.range, cfg.interval);
-      await new Promise(r => setTimeout(r, 1000));
-      if (goldRaw.length > 0) goldHistoryCache[cfg.period] = mergeByTime(goldRaw, usdtryData);
-      const silverRaw = await fetchYahooData('SI=F', cfg.range, cfg.interval);
-      await new Promise(r => setTimeout(r, 1000));
-      if (silverRaw.length > 0) {
-        silverHistoryCache[cfg.period] = mergeByTime(silverRaw, usdtryData).map(h => ({
-          time: h.time, price: Number(((h.priceUsd || h.price) * (h.usdtry || goldData.usdtry) / 31.1035).toFixed(4)),
-        }));
+      // 1. Supabase'den mevcut veriyi cache'e yükle
+      const existing = await loadFromSupabase(sym.api);
+      if (existing.length > 0) {
+        buildCacheFromData(existing, sym.cache);
+        console.log(`Supabase ${sym.api}: ${existing.length} kayıt cache'e yüklendi`);
       }
-      try {
-        const platinRaw = await fetchYahooData('PL=F', cfg.range, cfg.interval);
-        await new Promise(r => setTimeout(r, 1000));
-        if (platinRaw.length > 0) {
-          platinHistoryCache[cfg.period] = mergeByTime(platinRaw, usdtryData).map(h => ({
-            time: h.time, price: Number(((h.priceUsd || h.price) * (h.usdtry || goldData.usdtry) / 31.1035).toFixed(2)),
-          }));
+
+      // 2. En son tarihten eksik günleri hesapla
+      const lastDate    = await getLastSupabaseDate(sym.api);
+      const yesterday   = new Date(); yesterday.setDate(yesterday.getDate() - 1);
+      const yesterdayStr = fmtDate(yesterday);
+
+      if (!lastDate) {
+        // Hiç veri yok — 5 yıllık çek (5 × 365 gün = 5 istek)
+        console.log(`metalpriceapi: ${sym.api} 5 yıllık çekiliyor...`);
+        const allData = [];
+        for (let i = 4; i >= 0; i--) {
+          const endD   = new Date(); if (i > 0) endD.setFullYear(endD.getFullYear() - i);
+          const startD = new Date(endD); startD.setFullYear(startD.getFullYear() - 1);
+          const endStr   = i === 0 ? yesterdayStr : fmtDate(endD);
+          const startStr = fmtDate(startD);
+          try {
+            const chunk = await fetchMetalpriceRange(sym.api, startStr, endStr);
+            allData.push(...chunk);
+            console.log(`  ${sym.api} ${startStr}→${endStr}: ${chunk.length} gün`);
+            await new Promise(r => setTimeout(r, 1500));
+          } catch (e) { console.log(`  ${sym.api} chunk hata:`, e.message); }
         }
-      } catch(_) {}
-      try {
-        const paladyumRaw = await fetchYahooData('PA=F', cfg.range, cfg.interval);
-        await new Promise(r => setTimeout(r, 1000));
-        if (paladyumRaw.length > 0) {
-          paladyumHistoryCache[cfg.period] = mergeByTime(paladyumRaw, usdtryData).map(h => ({
-            time: h.time, price: Number(((h.priceUsd || h.price) * (h.usdtry || goldData.usdtry) / 31.1035).toFixed(2)),
-          }));
+        await saveToSupabase(allData.map(d => ({ date: d.date, symbol: sym.api, price_try: d.price })));
+        buildCacheFromData(allData, sym.cache);
+      } else if (lastDate < yesterdayStr) {
+        // Eksik günleri çek
+        const startD = new Date(lastDate); startD.setDate(startD.getDate() + 1);
+        const fetchStart = fmtDate(startD);
+        console.log(`metalpriceapi: ${sym.api} eksik ${fetchStart}→${yesterdayStr}`);
+        const newData = await fetchMetalpriceRange(sym.api, fetchStart, yesterdayStr);
+        if (newData.length > 0) {
+          await saveToSupabase(newData.map(d => ({ date: d.date, symbol: sym.api, price_try: d.price })));
+          const all = await loadFromSupabase(sym.api);
+          buildCacheFromData(all, sym.cache);
+          console.log(`${sym.api}: ${newData.length} yeni gün eklendi`);
         }
-      } catch(_) {}
+        await new Promise(r => setTimeout(r, 1500));
+      } else {
+        console.log(`${sym.api}: güncel (${lastDate})`);
+      }
     } catch (e) {
-      console.log(`Yahoo fallback ${cfg.period} hata:`, e.message);
+      console.log(`fetchGoldHistory ${sym.api} hata:`, e.message);
     }
   }
+  console.log('Altın geçmiş veri tamamlandı');
 }
+
+function scheduleMidnightMetals() {
+  const now  = new Date();
+  const next = new Date(); next.setHours(0, 5, 0, 0);
+  if (next <= now) next.setDate(next.getDate() + 1);
+  const msUntil = next - now;
+  console.log(`Gece güncellemesi ${Math.round(msUntil / 60000)} dk sonra`);
+  setTimeout(() => {
+    fetchGoldHistory();
+    setInterval(() => fetchGoldHistory(), 24 * 60 * 60 * 1000);
+  }, msUntil);
+}
+
 
 // 1G için intraday veriyi biriktir (5dk'da bir çağrılır)
 function appendGoldHistory() {
@@ -1153,10 +1150,11 @@ async function initialize() {
     await updateGoldData();
     appendGoldHistory();
 
-    // metals.dev geçmiş veri — arka planda
+    // metalpriceapi — 5 yıllık veri Supabase'e kaydet, her gece güncelle
     fetchGoldHistory().then(() => {
-      console.log('Altın geçmiş veri tamamlandı (metals.dev)');
+      console.log('Altın geçmiş veri tamamlandı');
     });
+    scheduleMidnightMetals();
 
     // 2 dakikada bir canlı altın fiyatı güncelle
     setInterval(async () => {
@@ -1164,8 +1162,7 @@ async function initialize() {
       appendGoldHistory();
     }, 2 * 60 * 1000);
 
-    // Saatte bir geçmiş veriyi güncelle (metals.dev günlük 2 istek = 48/gün → OK)
-    setInterval(() => fetchGoldHistory(), 60 * 60 * 1000);
+    // Saatte bir cache'i Supabase'den yenile
 
     setTimeout(() => {
       loadSparklines();
