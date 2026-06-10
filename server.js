@@ -199,23 +199,28 @@ async function fetchMetalpriceRange(symbol, startDate, endDate) {
 
 async function saveToSupabase(rows) {
   if (!rows.length) return;
-  try {
-    await axios.post(
-      `${SUPABASE_URL}/rest/v1/gold_price_history`,
-      rows,
-      {
-        headers: {
-          apikey: SUPABASE_KEY,
-          Authorization: `Bearer ${SUPABASE_KEY}`,
-          'Content-Type': 'application/json',
-          Prefer: 'resolution=ignore-duplicates',
-        },
-        timeout: 15000,
-      }
-    );
-    console.log(`Supabase: ${rows.length} kayıt eklendi`);
-  } catch (e) {
-    console.log('Supabase kayıt hata:', e.message);
+  // 500'er chunk ile gönder
+  const chunkSize = 500;
+  for (let i = 0; i < rows.length; i += chunkSize) {
+    const chunk = rows.slice(i, i + chunkSize);
+    try {
+      await axios.post(
+        `${SUPABASE_URL}/rest/v1/gold_price_history`,
+        chunk,
+        {
+          headers: {
+            apikey: SUPABASE_KEY,
+            Authorization: `Bearer ${SUPABASE_KEY}`,
+            'Content-Type': 'application/json',
+            Prefer: 'resolution=ignore-duplicates,return=minimal',
+          },
+          timeout: 15000,
+        }
+      );
+      console.log(`Supabase: ${chunk.length} kayıt eklendi`);
+    } catch (e) {
+      console.log('Supabase kayıt hata:', e.response?.status, e.response?.data || e.message);
+    }
   }
 }
 
@@ -283,14 +288,15 @@ async function fetchGoldHistory() {
       const yesterdayStr = fmtDate(yesterday);
 
       if (!lastDate) {
-        // Hiç veri yok — 5 yıllık çek (5 × 365 gün = 5 istek)
+        // Hiç veri yok — 5 yıllık çek (364 gün × 5 istek = tam 5 yıl)
         console.log(`metalpriceapi: ${sym.api} 5 yıllık çekiliyor...`);
         const allData = [];
+        const todayMs = new Date().setHours(0,0,0,0);
         for (let i = 4; i >= 0; i--) {
-          const endD   = new Date(); if (i > 0) endD.setFullYear(endD.getFullYear() - i);
-          const startD = new Date(endD); startD.setFullYear(startD.getFullYear() - 1);
-          const endStr   = i === 0 ? yesterdayStr : fmtDate(endD);
-          const startStr = fmtDate(startD);
+          const endMs   = todayMs - i * 365 * 24 * 60 * 60 * 1000 - 24 * 60 * 60 * 1000;
+          const startMs = endMs - 364 * 24 * 60 * 60 * 1000;
+          const endStr   = i === 0 ? fmtDate(new Date(todayMs - 24*60*60*1000)) : fmtDate(new Date(endMs));
+          const startStr = fmtDate(new Date(startMs));
           try {
             const chunk = await fetchMetalpriceRange(sym.api, startStr, endStr);
             allData.push(...chunk);
