@@ -991,12 +991,18 @@ app.get('/fund/price/:code', async (req, res) => {
     // Portföy büyüklüğü + yatırımcı sayısı — fonBilgiGetir endpoint'inden
     let totalValue = 0;
     let investorCount = 0;
+    let kategoriDerece = 0;
+    let kategoriFonSay = 0;
+    let fonKategori = '';
     try {
       const detayData = await fetchTefas('fonBilgiGetir', { fonKodu: code, dil: 'TR' });
       const detay = detayData?.resultList?.[0] || detayData?.data?.[0] || detayData?.[0] || detayData || {};
       console.log(`[fund/price] ${code} detay keys:`, Object.keys(detay).join(', '));
-      totalValue    = parseFloat(String(detay.portBuyukluk || detay.portfoyBuyuklugu || detay.PORTFOYBUYUKLUGU || 0).replace(',', '.')) || 0;
-      investorCount = parseInt(detay.yatirimciSayi || detay.kisiSayisi || detay.KISISAYISI || 0) || 0;
+      totalValue     = parseFloat(String(detay.portBuyukluk || detay.portfoyBuyuklugu || detay.PORTFOYBUYUKLUGU || 0).replace(',', '.')) || 0;
+      investorCount  = parseInt(detay.yatirimciSayi || detay.kisiSayisi || detay.KISISAYISI || 0) || 0;
+      kategoriDerece = parseInt(detay.kategoriDerece || 0) || 0;
+      kategoriFonSay = parseInt(detay.kategoriFonSay || 0) || 0;
+      fonKategori    = detay.fonKategori || '';
     } catch (e2) {
       console.log(`[fund/price] ${code} detay hata:`, e2.message);
     }
@@ -1009,9 +1015,9 @@ app.get('/fund/price/:code', async (req, res) => {
       date:           latest.tarih || latest.TARIH || latest.date,
       totalValue,
       investorCount,
-      kategoriDerece: parseInt(detay.kategoriDerece || 0) || 0,
-      kategoriFonSay: parseInt(detay.kategoriFonSay || 0) || 0,
-      fonKategori:    detay.fonKategori || '',
+      kategoriDerece,
+      kategoriFonSay,
+      fonKategori,
     });
   } catch (e) {
     res.status(500).json({ error: e.message });
