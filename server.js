@@ -189,7 +189,6 @@ async function fetchMetalpriceRange(symbol, startDate, endDate) {
       const ts   = Math.floor(new Date(dateStr).getTime() / 1000);
       const rate = vals[symbol];
       if (rate && rate > 0) {
-        // base=TRY: rate = 1 TRY kaç ons XAU → gram TRY = 1/rate/31.1035
         const gramTry = Number((1 / rate / 31.1035).toFixed(symbol === 'XAG' ? 4 : 2));
         result.push({ date: dateStr, time: ts, price: gramTry });
       }
@@ -199,7 +198,6 @@ async function fetchMetalpriceRange(symbol, startDate, endDate) {
 
 async function saveToSupabase(rows) {
   if (!rows.length) return;
-  // 500'er chunk ile gönder
   const chunkSize = 500;
   for (let i = 0; i < rows.length; i += chunkSize) {
     const chunk = rows.slice(i, i + chunkSize);
@@ -275,20 +273,17 @@ async function fetchGoldHistory() {
 
   for (const sym of symbols) {
     try {
-      // 1. Supabase'den mevcut veriyi cache'e yükle
       const existing = await loadFromSupabase(sym.api);
       if (existing.length > 0) {
         buildCacheFromData(existing, sym.cache);
         console.log(`Supabase ${sym.api}: ${existing.length} kayıt cache'e yüklendi`);
       }
 
-      // 2. En son tarihten eksik günleri hesapla
       const lastDate    = await getLastSupabaseDate(sym.api);
       const yesterday   = new Date(); yesterday.setDate(yesterday.getDate() - 1);
       const yesterdayStr = fmtDate(yesterday);
 
       if (!lastDate) {
-        // Hiç veri yok — 5 yıllık çek (364 gün × 5 istek = tam 5 yıl)
         console.log(`metalpriceapi: ${sym.api} 5 yıllık çekiliyor...`);
         const allData = [];
         const todayMs = new Date().setHours(0,0,0,0);
@@ -307,7 +302,6 @@ async function fetchGoldHistory() {
         await saveToSupabase(allData.map(d => ({ date: d.date, symbol: sym.api, price_try: d.price })));
         buildCacheFromData(allData, sym.cache);
       } else if (lastDate < yesterdayStr) {
-        // Eksik günleri çek
         const startD = new Date(lastDate); startD.setDate(startD.getDate() + 1);
         const fetchStart = fmtDate(startD);
         console.log(`metalpriceapi: ${sym.api} eksik ${fetchStart}→${yesterdayStr}`);
@@ -341,8 +335,6 @@ function scheduleMidnightMetals() {
   }, msUntil);
 }
 
-
-// 1G için intraday veriyi biriktir (5dk'da bir çağrılır)
 function appendGoldHistory() {
   const now    = Math.floor(Date.now() / 1000);
   const cutoff = now - 24 * 60 * 60;
@@ -479,7 +471,6 @@ app.get('/chart/gold/:symbol', (req, res) => {
   const symbol       = req.params.symbol.toUpperCase();
   const backendPeriod = req.query.period || '1D';
 
-  // Platin
   if (symbol === 'PLATIN') {
     const h = backendPeriod === '1D' ? platinIntraday : (platinHistoryCache[backendPeriod] || []);
     if (h.length === 0) {
@@ -493,7 +484,6 @@ app.get('/chart/gold/:symbol', (req, res) => {
     return res.json(data);
   }
 
-  // Paladyum
   if (symbol === 'PALADYUM') {
     const h = backendPeriod === '1D' ? paladyumIntraday : (paladyumHistoryCache[backendPeriod] || []);
     if (h.length === 0) {
@@ -507,7 +497,6 @@ app.get('/chart/gold/:symbol', (req, res) => {
     return res.json(data);
   }
 
-  // Gümüş
   if (symbol === 'GUMUS') {
     const h = backendPeriod === '1D' ? silverIntraday : (silverHistoryCache[backendPeriod] || []);
     if (h.length === 0 && goldData.gramSilverTry > 0) {
@@ -520,7 +509,6 @@ app.get('/chart/gold/:symbol', (req, res) => {
     return res.json(data);
   }
 
-  // Altın + türevleri
   const history    = getGoldHistory(backendPeriod);
   const multiplier = GOLD_MULTIPLIERS[symbol] || 1.0;
 
@@ -537,7 +525,6 @@ app.get('/chart/gold/:symbol', (req, res) => {
     return { time: h.time, price: Number((h.price * multiplier).toFixed(2)) };
   });
 
-  // Son noktayı anlık fiyatla override et
   if (data.length > 0 && goldData.gramTry > 0) {
     const now      = Math.floor(Date.now() / 1000);
     const lastPrice = symbol === 'XAUUSD' ? goldData.xauusd : goldData.gramTry * multiplier;
@@ -1138,6 +1125,29 @@ app.get('/fund/search', async (req, res) => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// VARLIK DAĞILIMI — besfongetirileri.com proxy (CORS bypass)
+// ─────────────────────────────────────────────────────────────────────────────
+app.get('/fund/allocation/:code', async (req, res) => {
+  try {
+    const code = req.params.code.toUpperCase();
+    const response = await axios.get(
+      `https://www.besfongetirileri.com/FonDetayliAnaliz/getPieChartData?FundCode=${code}`,
+      {
+        timeout: 15000,
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+          'Referer': 'https://www.besfongetirileri.com/',
+          'Accept': 'application/json, text/plain, */*',
+        },
+      }
+    );
+    res.json(response.data);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Initialize
 // ─────────────────────────────────────────────────────────────────────────────
 async function initialize() {
@@ -1152,23 +1162,18 @@ async function initialize() {
     startWebSocket();
     loadCoinStats();
 
-    // Altın canlı fiyat
     await updateGoldData();
     appendGoldHistory();
 
-    // metalpriceapi — 5 yıllık veri Supabase'e kaydet, her gece güncelle
     fetchGoldHistory().then(() => {
       console.log('Altın geçmiş veri tamamlandı');
     });
     scheduleMidnightMetals();
 
-    // 2 dakikada bir canlı altın fiyatı güncelle
     setInterval(async () => {
       await updateGoldData();
       appendGoldHistory();
     }, 2 * 60 * 1000);
-
-    // Saatte bir cache'i Supabase'den yenile
 
     setTimeout(() => {
       loadSparklines();
