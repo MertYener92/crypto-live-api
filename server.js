@@ -995,8 +995,8 @@ app.get('/fund/price/:code', async (req, res) => {
       const detayData = await fetchTefas('fonBilgiGetir', { fonKodu: code, dil: 'TR' });
       const detay = detayData?.resultList?.[0] || detayData?.data?.[0] || detayData?.[0] || detayData || {};
       console.log(`[fund/price] ${code} detay keys:`, Object.keys(detay).join(', '));
-      totalValue    = parseFloat(String(detay.portfoyBuyuklugu || detay.PORTFOYBUYUKLUGU || detay.portfoyDegeri || detay.fonBuyuklugu || detay.toplam || 0).replace(',', '.')) || 0;
-      investorCount = parseInt(detay.kisiSayisi || detay.KISISAYISI || detay.yatirimciSayisi || detay.katilimciSayisi || 0) || 0;
+      totalValue    = parseFloat(String(detay.portBuyukluk || detay.portfoyBuyuklugu || detay.PORTFOYBUYUKLUGU || 0).replace(',', '.')) || 0;
+      investorCount = parseInt(detay.yatirimciSayi || detay.kisiSayisi || detay.KISISAYISI || 0) || 0;
     } catch (e2) {
       console.log(`[fund/price] ${code} detay hata:`, e2.message);
     }
