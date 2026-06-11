@@ -976,24 +976,61 @@ async function fetchTefas(endpoint, params) {
 app.get('/fund/price/:code', async (req, res) => {
   try {
     const code = req.params.code.toUpperCase();
-    const data = await fetchTefas('fonFiyatBilgiGetir', { fonKodu: code, dil: 'TR', periyod: 1 });
-    if (!data || data.faultCode) return res.status(404).json({ error: 'Fon bulunamadı', raw: data });
-    const items = data?.resultList || data?.data || data?.fiyatlar || (Array.isArray(data) ? data : null);
-    if (!items?.length) return res.status(404).json({ error: 'Fiyat yok', raw: data });
+
+    // Fiyat verisi
+    const priceData = await fetchTefas('fonFiyatBilgiGetir', { fonKodu: code, dil: 'TR', periyod: 1 });
+    if (!priceData || priceData.faultCode) return res.status(404).json({ error: 'Fon bulunamadı', raw: priceData });
+    const items = priceData?.resultList || priceData?.data || priceData?.fiyatlar || (Array.isArray(priceData) ? priceData : null);
+    if (!items?.length) return res.status(404).json({ error: 'Fiyat yok', raw: priceData });
     const latest = items[items.length - 1];
     const prev   = items.length > 1 ? items[items.length - 2] : null;
     const price  = parseFloat(String(latest.fiyat || latest.FIYAT || latest.birimPayDegeri || 0).replace(',', '.'));
     const prevP  = prev ? parseFloat(String(prev.fiyat || prev.FIYAT || prev.birimPayDegeri || price).replace(',', '.')) : price;
     const change = prevP > 0 ? ((price - prevP) / prevP) * 100 : 0;
+
+    // Portföy büyüklüğü + yatırımcı sayısı — fonBilgiGetir endpoint'inden
+    let totalValue = 0;
+    let investorCount = 0;
+    try {
+      const detayData = await fetchTefas('fonBilgiGetir', { fonKodu: code, dil: 'TR' });
+      const detay = detayData?.resultList?.[0] || detayData?.data?.[0] || detayData?.[0] || detayData || {};
+      console.log(`[fund/price] ${code} detay keys:`, Object.keys(detay).join(', '));
+      totalValue    = parseFloat(String(detay.portfoyBuyuklugu || detay.PORTFOYBUYUKLUGU || detay.portfoyDegeri || detay.fonBuyuklugu || detay.toplam || 0).replace(',', '.')) || 0;
+      investorCount = parseInt(detay.kisiSayisi || detay.KISISAYISI || detay.yatirimciSayisi || detay.katilimciSayisi || 0) || 0;
+    } catch (e2) {
+      console.log(`[fund/price] ${code} detay hata:`, e2.message);
+    }
+
     res.json({
       code,
-      name:          latest.fonUnvan || data.fonUnvani || latest.FONUNVAN || code,
+      name:          latest.fonUnvan || priceData.fonUnvani || latest.FONUNVAN || code,
       price,
       change:        Number(change.toFixed(4)),
       date:          latest.tarih || latest.TARIH || latest.date,
-      totalValue:    parseFloat(String(latest.portfoyBuyuklugu || latest.PORTFOYBUYUKLUGU || 0).replace(',', '.')),
-      investorCount: parseInt(latest.kisiSayisi || latest.KISISAYISI || 0),
+      totalValue,
+      investorCount,
     });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Debug — TEFAS ham veri görüntüle
+app.get('/fund/debug/:code', async (req, res) => {
+  try {
+    const code = req.params.code.toUpperCase();
+    const endpoints = ['fonBilgiGetir', 'getFplFonList', 'fonDetayGetir'];
+    const results = {};
+    for (const ep of endpoints) {
+      try {
+        const d = await fetchTefas(ep, { fonKodu: code, dil: 'TR' });
+        const item = d?.resultList?.[0] || d?.data?.[0] || d?.[0] || d || {};
+        results[ep] = { keys: Object.keys(item), sample: item };
+      } catch (e) {
+        results[ep] = { error: e.message };
+      }
+    }
+    res.json(results);
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
