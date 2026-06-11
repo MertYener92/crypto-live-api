@@ -1003,12 +1003,15 @@ app.get('/fund/price/:code', async (req, res) => {
 
     res.json({
       code,
-      name:          latest.fonUnvan || priceData.fonUnvani || latest.FONUNVAN || code,
+      name:           latest.fonUnvan || priceData.fonUnvani || latest.FONUNVAN || code,
       price,
-      change:        Number(change.toFixed(4)),
-      date:          latest.tarih || latest.TARIH || latest.date,
+      change:         Number(change.toFixed(4)),
+      date:           latest.tarih || latest.TARIH || latest.date,
       totalValue,
       investorCount,
+      kategoriDerece: parseInt(detay.kategoriDerece || 0) || 0,
+      kategoriFonSay: parseInt(detay.kategoriFonSay || 0) || 0,
+      fonKategori:    detay.fonKategori || '',
     });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -1234,4 +1237,4 @@ async function initialize() {
 }
 
 initialize();
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));//aa
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
