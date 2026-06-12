@@ -1264,6 +1264,97 @@ async function loadGoldIntradayFromSupabase() {
   }
 }
 
+
+// ─────────────────────────────────────────────────────────────────────────────
+// BES FONLARI — Gece otomatik fiyat güncelleme
+// ─────────────────────────────────────────────────────────────────────────────
+async function fetchAndSaveAllBesPrices() {
+  console.log('BES fiyat güncelleme başladı...');
+  try {
+    // Supabase'deki tüm BES fonlarını çek
+    const response = await axios.get(
+      `${SUPABASE_URL}/rest/v1/assets?select=symbol,name&type=eq.fund&is_active=eq.true`,
+      { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` }, timeout: 10000 }
+    );
+    const funds = response.data || [];
+    console.log(`BES: ${funds.length} fon bulundu`);
+
+    let success = 0, failed = 0;
+    const today = new Date().toISOString().split('T')[0];
+
+    for (const fund of funds) {
+      try {
+        // TEFAS'tan fiyat çek
+        const tefasResponse = await axios.post(
+          'https://www.tefas.gov.tr/api/funds/fonFiyatBilgiGetir',
+          { fonKodu: fund.symbol, dil: 'TR', periyod: 1 },
+          {
+            timeout: 15000,
+            headers: {
+              'Accept': 'application/json',
+              'Content-Type': 'application/json',
+              'Origin': 'https://www.tefas.gov.tr',
+              'Referer': 'https://www.tefas.gov.tr/',
+              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            },
+          }
+        );
+
+        const items = tefasResponse.data?.resultList || tefasResponse.data?.data || [];
+        if (!items.length) { failed++; continue; }
+
+        const latest = items[items.length - 1];
+        const prev   = items.length > 1 ? items[items.length - 2] : null;
+        const price  = parseFloat(String(latest.fiyat || latest.FIYAT || latest.birimPayDegeri || 0).replace(',', '.'));
+        const prevP  = prev ? parseFloat(String(prev.fiyat || prev.FIYAT || prev.birimPayDegeri || price).replace(',', '.')) : price;
+        const change = prevP > 0 ? ((price - prevP) / prevP) * 100 : 0;
+        const date   = latest.tarih || latest.TARIH || today;
+
+        if (price <= 0) { failed++; continue; }
+
+        // Supabase'e upsert et
+        await axios.post(
+          `${SUPABASE_URL}/rest/v1/fund_prices`,
+          { symbol: fund.symbol, price, change: Number(change.toFixed(4)), date },
+          {
+            headers: {
+              apikey: SUPABASE_KEY,
+              Authorization: `Bearer ${SUPABASE_KEY}`,
+              'Content-Type': 'application/json',
+              Prefer: 'resolution=merge-duplicates,return=minimal',
+            },
+            timeout: 5000,
+          }
+        );
+        success++;
+
+        // Rate limiting — TEFAS'ı bunaltmayalım
+        await new Promise(r => setTimeout(r, 200));
+      } catch (e) {
+        failed++;
+        await new Promise(r => setTimeout(r, 500));
+      }
+    }
+    console.log(`BES güncelleme tamamlandı: ${success} başarılı, ${failed} başarısız`);
+  } catch (e) {
+    console.log('fetchAndSaveAllBesPrices hata:', e.message);
+  }
+}
+
+function scheduleBesMidnightUpdate() {
+  // Her gece 02:00'da çalıştır (Türkiye saati UTC+3, yani UTC 23:00)
+  const now  = new Date();
+  const next = new Date();
+  next.setUTCHours(23, 0, 0, 0);
+  if (next <= now) next.setDate(next.getDate() + 1);
+  const msUntil = next - now;
+  console.log(`BES gece güncellemesi ${Math.round(msUntil / 60000)} dk sonra (02:00 TR)`);
+  setTimeout(() => {
+    fetchAndSaveAllBesPrices();
+    setInterval(() => fetchAndSaveAllBesPrices(), 24 * 60 * 60 * 1000);
+  }, msUntil);
+}
+
 async function initialize() {
   try {
     const symbols = await loadCoinbaseSymbols();
@@ -1284,6 +1375,7 @@ async function initialize() {
       console.log('Altın geçmiş veri tamamlandı');
     });
     scheduleMidnightMetals();
+    scheduleBesMidnightUpdate();
 
     setInterval(async () => {
       await updateGoldData();
