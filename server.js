@@ -1240,6 +1240,71 @@ async function initialize() {
 initialize();
 
 // ─────────────────────────────────────────────────────────────────────────────
+// DÖVİZ — Truncgil v3
+// ─────────────────────────────────────────────────────────────────────────────
+let forexData = {};
+
+const FOREX_PAIRS = {
+  'USD': { key: 'dolar',                    name: 'Amerikan Doları',    flag: '🇺🇸' },
+  'EUR': { key: 'euro',                     name: 'Euro',               flag: '🇪🇺' },
+  'GBP': { key: 'sterlin',                  name: 'İngiliz Sterlini',   flag: '🇬🇧' },
+  'CHF': { key: 'isvicre-frangi',           name: 'İsviçre Frangı',     flag: '🇨🇭' },
+  'JPY': { key: 'japon-yeni',               name: 'Japon Yeni',         flag: '🇯🇵' },
+  'CNY': { key: 'cin-yuani',                name: 'Çin Yuanı',          flag: '🇨🇳' },
+  'SAR': { key: 'suudi-arabistan-riyali',   name: 'Suudi Riyali',       flag: '🇸🇦' },
+  'AED': { key: 'bae-dirhemi',              name: 'BAE Dirhemi',        flag: '🇦🇪' },
+  'RUB': { key: 'rus-rublesi',              name: 'Rus Rublesi',        flag: '🇷🇺' },
+  'CAD': { key: 'kanada-dolari',            name: 'Kanada Doları',      flag: '🇨🇦' },
+  'AUD': { key: 'avustralya-dolari',        name: 'Avustralya Doları',  flag: '🇦🇺' },
+  'NOK': { key: 'norvec-kronu',             name: 'Norveç Kronu',       flag: '🇳🇴' },
+  'SEK': { key: 'isvec-kronu',              name: 'İsveç Kronu',        flag: '🇸🇪' },
+  'DKK': { key: 'danimarka-kronu',          name: 'Danimarka Kronu',    flag: '🇩🇰' },
+  'KWD': { key: 'kuveyt-dinari',            name: 'Kuveyt Dinarı',      flag: '🇰🇼' },
+};
+
+async function fetchForexPrices() {
+  try {
+    const response = await axios.get(
+      'https://finans.truncgil.com/v3/today.json',
+      { timeout: 10000 }
+    );
+    const data = response.data;
+    const parsePrice = (val) => {
+      if (!val) return 0;
+      return parseFloat(String(val).replace(/\./g, '').replace(',', '.').replace('$', '').trim()) || 0;
+    };
+    const parseChange = (val) => {
+      if (!val) return 0;
+      return parseFloat(String(val).replace('%', '').replace(',', '.').trim()) || 0;
+    };
+    Object.entries(FOREX_PAIRS).forEach(([symbol, info]) => {
+      const sell   = parsePrice(data[info.key]?.Selling);
+      const change = parseChange(data[info.key]?.Change);
+      if (sell > 0) {
+        forexData[symbol] = {
+          symbol,
+          name:      info.name,
+          flag:      info.flag,
+          price:     sell,
+          change,
+          type:      'currency',
+          updatedAt: new Date().toISOString(),
+        };
+      }
+    });
+    console.log('Döviz güncellendi:', Object.keys(forexData).join(', '));
+  } catch (e) {
+    console.log('Döviz hata:', e.message);
+  }
+}
+
+app.get('/forex-prices', (req, res) => res.json(forexData));
+
+// İlk çekim + her 5 dakikada güncelle
+fetchForexPrices();
+setInterval(() => fetchForexPrices(), 5 * 60 * 1000);
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Flutter WebSocket Sunucusu — /ws endpoint'i
 // ─────────────────────────────────────────────────────────────────────────────
 const clients = new Set();
@@ -1247,6 +1312,8 @@ const wss = new WebSocketServer({ noServer: true });
 
 function buildPricePayload() {
   const result = {};
+
+  // Kripto
   orderedSymbols.forEach(symbol => {
     if (prices[symbol]) {
       result[symbol] = {
@@ -1263,6 +1330,12 @@ function buildPricePayload() {
       };
     }
   });
+
+  // Döviz — aynı pakete ekle
+  Object.entries(forexData).forEach(([symbol, data]) => {
+    result[symbol] = data;
+  });
+
   return JSON.stringify(result);
 }
 
