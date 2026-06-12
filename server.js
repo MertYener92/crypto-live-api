@@ -336,25 +336,68 @@ function scheduleMidnightMetals() {
   }, msUntil);
 }
 
-function appendGoldHistory() {
+async function appendGoldHistory() {
   const now    = Math.floor(Date.now() / 1000);
   const cutoff = now - 24 * 60 * 60;
+  const recordedAt = new Date().toISOString();
 
   if (goldData.gramTry > 0) {
     goldIntraday.push({ time: now, price: goldData.gramTry });
     goldIntraday = goldIntraday.filter(h => h.time >= cutoff);
+    // Supabase'e kaydet
+    try {
+      await axios.post(
+        `${SUPABASE_URL}/rest/v1/gold_intraday`,
+        { symbol: 'XAU', price_try: goldData.gramTry, recorded_at: recordedAt },
+        { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json', Prefer: 'return=minimal' }, timeout: 5000 }
+      );
+    } catch (e) { console.log('gold_intraday kayıt hata (XAU):', e.message); }
   }
   if (goldData.gramSilverTry > 0) {
     silverIntraday.push({ time: now, price: goldData.gramSilverTry });
     silverIntraday = silverIntraday.filter(h => h.time >= cutoff);
+    try {
+      await axios.post(
+        `${SUPABASE_URL}/rest/v1/gold_intraday`,
+        { symbol: 'XAG', price_try: goldData.gramSilverTry, recorded_at: recordedAt },
+        { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json', Prefer: 'return=minimal' }, timeout: 5000 }
+      );
+    } catch (e) { console.log('gold_intraday kayıt hata (XAG):', e.message); }
   }
   if (sarrafiyeData.PLATIN?.price > 0) {
     platinIntraday.push({ time: now, price: sarrafiyeData.PLATIN.price });
     platinIntraday = platinIntraday.filter(h => h.time >= cutoff);
+    try {
+      await axios.post(
+        `${SUPABASE_URL}/rest/v1/gold_intraday`,
+        { symbol: 'XPT', price_try: sarrafiyeData.PLATIN.price, recorded_at: recordedAt },
+        { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json', Prefer: 'return=minimal' }, timeout: 5000 }
+      );
+    } catch (e) { console.log('gold_intraday kayıt hata (XPT):', e.message); }
   }
   if (sarrafiyeData.PALADYUM?.price > 0) {
     paladyumIntraday.push({ time: now, price: sarrafiyeData.PALADYUM.price });
     paladyumIntraday = paladyumIntraday.filter(h => h.time >= cutoff);
+    try {
+      await axios.post(
+        `${SUPABASE_URL}/rest/v1/gold_intraday`,
+        { symbol: 'XPD', price_try: sarrafiyeData.PALADYUM.price, recorded_at: recordedAt },
+        { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json', Prefer: 'return=minimal' }, timeout: 5000 }
+      );
+    } catch (e) { console.log('gold_intraday kayıt hata (XPD):', e.message); }
+  }
+
+  // 2 günden eski kayıtları temizle (günde 1 kez)
+  const hour = new Date().getHours();
+  const minute = new Date().getMinutes();
+  if (hour === 0 && minute < 4) {
+    try {
+      await axios.delete(
+        `${SUPABASE_URL}/rest/v1/gold_intraday?recorded_at=lt.${new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString()}`,
+        { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` }, timeout: 5000 }
+      );
+      console.log('Eski gold_intraday kayıtları temizlendi');
+    } catch (e) { console.log('gold_intraday temizleme hata:', e.message); }
   }
 }
 
@@ -1191,6 +1234,36 @@ app.get('/fund/allocation/:code', async (req, res) => {
 // ─────────────────────────────────────────────────────────────────────────────
 // Initialize
 // ─────────────────────────────────────────────────────────────────────────────
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Restart sonrası Supabase'den intraday veriyi yükle
+// ─────────────────────────────────────────────────────────────────────────────
+async function loadGoldIntradayFromSupabase() {
+  try {
+    const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    const symbolMap = { 'XAU': 'gold', 'XAG': 'silver', 'XPT': 'platin', 'XPD': 'paladyum' };
+
+    for (const [sym, type] of Object.entries(symbolMap)) {
+      const response = await axios.get(
+        `${SUPABASE_URL}/rest/v1/gold_intraday?select=price_try,recorded_at&symbol=eq.${sym}&recorded_at=gte.${cutoff}&order=recorded_at.asc&limit=1000`,
+        { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` }, timeout: 10000 }
+      );
+      const rows = response.data || [];
+      const data = rows.map(r => ({
+        time: Math.floor(new Date(r.recorded_at).getTime() / 1000),
+        price: parseFloat(r.price_try),
+      })).filter(r => r.price > 0);
+
+      if (type === 'gold')    { goldIntraday    = data; console.log(`gold_intraday yüklendi: ${data.length} kayıt (XAU)`); }
+      if (type === 'silver')  { silverIntraday  = data; console.log(`gold_intraday yüklendi: ${data.length} kayıt (XAG)`); }
+      if (type === 'platin')  { platinIntraday  = data; console.log(`gold_intraday yüklendi: ${data.length} kayıt (XPT)`); }
+      if (type === 'paladyum'){ paladyumIntraday = data; console.log(`gold_intraday yüklendi: ${data.length} kayıt (XPD)`); }
+    }
+  } catch (e) {
+    console.log('loadGoldIntradayFromSupabase hata:', e.message);
+  }
+}
+
 async function initialize() {
   try {
     const symbols = await loadCoinbaseSymbols();
@@ -1204,6 +1277,7 @@ async function initialize() {
     loadCoinStats();
 
     await updateGoldData();
+    await loadGoldIntradayFromSupabase();
     appendGoldHistory();
 
     fetchGoldHistory().then(() => {
