@@ -1245,21 +1245,21 @@ initialize();
 let forexData = {};
 
 const FOREX_PAIRS = {
-  'USD': { key: 'dolar',                    name: 'Amerikan Doları',    flag: '🇺🇸' },
-  'EUR': { key: 'euro',                     name: 'Euro',               flag: '🇪🇺' },
-  'GBP': { key: 'sterlin',                  name: 'İngiliz Sterlini',   flag: '🇬🇧' },
-  'CHF': { key: 'isvicre-frangi',           name: 'İsviçre Frangı',     flag: '🇨🇭' },
-  'JPY': { key: 'japon-yeni',               name: 'Japon Yeni',         flag: '🇯🇵' },
-  'CNY': { key: 'cin-yuani',                name: 'Çin Yuanı',          flag: '🇨🇳' },
-  'SAR': { key: 'suudi-arabistan-riyali',   name: 'Suudi Riyali',       flag: '🇸🇦' },
-  'AED': { key: 'bae-dirhemi',              name: 'BAE Dirhemi',        flag: '🇦🇪' },
-  'RUB': { key: 'rus-rublesi',              name: 'Rus Rublesi',        flag: '🇷🇺' },
-  'CAD': { key: 'kanada-dolari',            name: 'Kanada Doları',      flag: '🇨🇦' },
-  'AUD': { key: 'avustralya-dolari',        name: 'Avustralya Doları',  flag: '🇦🇺' },
-  'NOK': { key: 'norvec-kronu',             name: 'Norveç Kronu',       flag: '🇳🇴' },
-  'SEK': { key: 'isvec-kronu',              name: 'İsveç Kronu',        flag: '🇸🇪' },
-  'DKK': { key: 'danimarka-kronu',          name: 'Danimarka Kronu',    flag: '🇩🇰' },
-  'KWD': { key: 'kuveyt-dinari',            name: 'Kuveyt Dinarı',      flag: '🇰🇼' },
+  'USD': { key: 'USD', name: 'Amerikan Dolari',   flag: '🇺🇸' },
+  'EUR': { key: 'EUR', name: 'Euro',               flag: '🇪🇺' },
+  'GBP': { key: 'GBP', name: 'Ingiliz Sterlini',  flag: '🇬🇧' },
+  'CHF': { key: 'CHF', name: 'Isvicre Frangi',    flag: '🇨🇭' },
+  'JPY': { key: 'JPY', name: 'Japon Yeni',         flag: '🇯🇵' },
+  'CNY': { key: 'CNY', name: 'Cin Yuani',          flag: '🇨🇳' },
+  'SAR': { key: 'SAR', name: 'Suudi Riyali',       flag: '🇸🇦' },
+  'AED': { key: 'AED', name: 'BAE Dirhemi',        flag: '🇦🇪' },
+  'RUB': { key: 'RUB', name: 'Rus Rublesi',        flag: '🇷🇺' },
+  'CAD': { key: 'CAD', name: 'Kanada Dolari',      flag: '🇨🇦' },
+  'AUD': { key: 'AUD', name: 'Avustralya Dolari',  flag: '🇦🇺' },
+  'NOK': { key: 'NOK', name: 'Norvec Kronu',       flag: '🇳🇴' },
+  'SEK': { key: 'SEK', name: 'Isvec Kronu',        flag: '🇸🇪' },
+  'DKK': { key: 'DKK', name: 'Danimarka Kronu',    flag: '🇩🇰' },
+  'KWD': { key: 'KWD', name: 'Kuveyt Dinari',      flag: '🇰🇼' },
 };
 
 async function fetchForexPrices() {
