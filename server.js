@@ -1,5 +1,6 @@
 const express = require('express');
 const WebSocket = require('ws').WebSocket;
+const WebSocketServer = require('ws').WebSocketServer;
 const cors = require('cors');
 const axios = require('axios');
 
@@ -781,7 +782,7 @@ app.get('/logo/:symbol', async (req, res) => {
   try {
     if (logoCache[symbol]) {
       res.set('Content-Type', logoCache[symbol].contentType);
-      res.set('Cache-Control', 'public, max-age=86400');
+      res.set('Cache-Control', 'public, max-age=604800');
       return res.send(logoCache[symbol].data);
     }
     const logoUrl = coinMetadata[symbol]?.logo;
@@ -790,7 +791,7 @@ app.get('/logo/:symbol', async (req, res) => {
     const contentType = response.headers['content-type'] || 'image/png';
     logoCache[symbol] = { data: response.data, contentType };
     res.set('Content-Type', contentType);
-    res.set('Cache-Control', 'public, max-age=86400');
+    res.set('Cache-Control', 'public, max-age=604800');
     res.send(response.data);
   } catch (e) {
     res.status(500).send('Logo fetch failed');
@@ -976,8 +977,6 @@ async function fetchTefas(endpoint, params) {
 app.get('/fund/price/:code', async (req, res) => {
   try {
     const code = req.params.code.toUpperCase();
-
-    // Fiyat verisi
     const priceData = await fetchTefas('fonFiyatBilgiGetir', { fonKodu: code, dil: 'TR', periyod: 1 });
     if (!priceData || priceData.faultCode) return res.status(404).json({ error: 'Fon bulunamadı', raw: priceData });
     const items = priceData?.resultList || priceData?.data || priceData?.fiyatlar || (Array.isArray(priceData) ? priceData : null);
@@ -987,8 +986,6 @@ app.get('/fund/price/:code', async (req, res) => {
     const price  = parseFloat(String(latest.fiyat || latest.FIYAT || latest.birimPayDegeri || 0).replace(',', '.'));
     const prevP  = prev ? parseFloat(String(prev.fiyat || prev.FIYAT || prev.birimPayDegeri || price).replace(',', '.')) : price;
     const change = prevP > 0 ? ((price - prevP) / prevP) * 100 : 0;
-
-    // Portföy büyüklüğü + yatırımcı sayısı — fonBilgiGetir endpoint'inden
     let totalValue = 0;
     let investorCount = 0;
     let kategoriDerece = 0;
@@ -1006,7 +1003,6 @@ app.get('/fund/price/:code', async (req, res) => {
     } catch (e2) {
       console.log(`[fund/price] ${code} detay hata:`, e2.message);
     }
-
     res.json({
       code,
       name:           latest.fonUnvan || priceData.fonUnvani || latest.FONUNVAN || code,
@@ -1024,7 +1020,6 @@ app.get('/fund/price/:code', async (req, res) => {
   }
 });
 
-// Debug — TEFAS ham veri görüntüle
 app.get('/fund/debug/:code', async (req, res) => {
   try {
     const code = req.params.code.toUpperCase();
@@ -1243,4 +1238,65 @@ async function initialize() {
 }
 
 initialize();
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Flutter WebSocket Sunucusu — /ws endpoint'i
+// ─────────────────────────────────────────────────────────────────────────────
+const clients = new Set();
+const wss = new WebSocketServer({ noServer: true });
+
+function buildPricePayload() {
+  const result = {};
+  orderedSymbols.forEach(symbol => {
+    if (prices[symbol]) {
+      result[symbol] = {
+        rank:      prices[symbol].rank,
+        symbol:    prices[symbol].symbol,
+        name:      prices[symbol].name,
+        price:     prices[symbol].price,
+        change:    prices[symbol].change,
+        marketCap: prices[symbol].marketCap,
+        high24h:   prices[symbol].high24h,
+        low24h:    prices[symbol].low24h,
+        logo:      prices[symbol].logo,
+        sparkline: sparklineCache[symbol] || [],
+      };
+    }
+  });
+  return JSON.stringify(result);
+}
+
+wss.on('connection', (socket) => {
+  clients.add(socket);
+  console.log(`Flutter WS bağlandı. Toplam: ${clients.size}`);
+  // Bağlanınca hemen mevcut fiyatları gönder
+  socket.send(buildPricePayload());
+  socket.on('close', () => {
+    clients.delete(socket);
+    console.log(`Flutter WS ayrıldı. Toplam: ${clients.size}`);
+  });
+  socket.on('error', () => {
+    clients.delete(socket);
+  });
+});
+
+// Her 3 saniyede tüm Flutter clientlarına broadcast et
+setInterval(() => {
+  if (clients.size === 0) return;
+  const msg = buildPricePayload();
+  clients.forEach(client => {
+    if (client.readyState === 1) client.send(msg);
+  });
+}, 3000);
+
+const server = app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+
+server.on('upgrade', (request, socket, head) => {
+  if (request.url === '/ws') {
+    wss.handleUpgrade(request, socket, head, (ws) => {
+      wss.emit('connection', ws, request);
+    });
+  } else {
+    socket.destroy();
+  }
+});
