@@ -1287,7 +1287,7 @@ async function fetchForexPrices() {
           flag:      info.flag,
           price:     sell,
           change,
-          type:      'currency',
+          type:      'forex',
           updatedAt: new Date().toISOString(),
         };
       }
