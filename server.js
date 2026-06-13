@@ -506,9 +506,10 @@ app.get('/chart/:symbol', async (req, res) => {
 
     // Coinbase'de veri yoksa CoinGecko'dan dene
     const geckoId = meta?.geckoId;
+    console.log(`[chart] ${symbol} meta:`, meta ? `rank=${meta.rank} geckoId=${meta.geckoId}` : 'YOK');
     const geckoTarget = geckoId || null;
 
-    if (geckoTarget || !meta) {
+    if (true) { // geckoId olsun olmasın dene
       try {
         // geckoId yoksa önce sembolden bul
         let resolvedId = geckoTarget;
