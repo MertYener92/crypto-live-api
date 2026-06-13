@@ -543,10 +543,7 @@ app.get('/chart/:symbol', async (req, res) => {
       return res.json(chartData);
     }
 
-    // Coinbase'de veri yoksa CoinGecko'dan dene
-    const geckoId = meta?.geckoId;
-    const geckoTarget = geckoId || null;
-
+    // Coinbase'de veri yoksa Binance dene
     if (true) {
       const cacheKey = `${symbol}_${period}`;
       const cached = geckoChartCache[cacheKey];
@@ -555,40 +552,35 @@ app.get('/chart/:symbol', async (req, res) => {
       }
 
       try {
-        const daysMap = { '1D': 1, '1M': 30, '3M': 90, '6M': 180, '1Y': 365, '5Y': 1825 };
-        const days = daysMap[period] || 1;
-        const intervalMap = { '1D': 'm5', '1M': 'h1', '3M': 'h6', '6M': 'h12', '1Y': 'd1', '5Y': 'd1' };
-        const interval = intervalMap[period] || 'm5';
-        const endTime = Date.now();
-        const startTime = endTime - days * 24 * 60 * 60 * 1000;
+        const intervalMap = { '1D': '1h', '1M': '4h', '3M': '1d', '6M': '1d', '1Y': '1d', '5Y': '1w' };
+        const limitMap =   { '1D': 24,   '1M': 180,  '3M': 90,   '6M': 180,  '1Y': 365,  '5Y': 260 };
+        const interval = intervalMap[period] || '1h';
+        const limit = limitMap[period] || 24;
 
-        // CoinCap'te asset ID bul
-        const searchRes = await axios.get(
-          `https://api.coincap.io/v2/assets?search=${symbol}&limit=5`,
-          { timeout: 8000 }
-        );
-        const asset = (searchRes.data?.data || []).find(a =>
-          a.symbol.toUpperCase() === symbol
-        );
+        // Binance USDT pair dene
+        const pairs = [`${symbol}USDT`, `${symbol}BTC`];
+        let chartData = null;
 
-        if (asset?.id) {
-          const histRes = await axios.get(
-            `https://api.coincap.io/v2/assets/${asset.id}/history`,
-            { params: { interval, start: startTime, end: endTime }, timeout: 10000 }
-          );
-          const points = histRes.data?.data || [];
-          if (points.length > 0) {
-            const chartData = points.map(p => ({
-              time: Math.floor(p.time / 1000),
-              price: parseFloat(p.priceUsd)
-            }));
-            console.log(`[chart] ${symbol} CoinCap (${asset.id}): ${chartData.length} nokta`);
-            geckoChartCache[cacheKey] = { data: chartData, time: Date.now() };
-            return res.json(chartData);
-          }
+        for (const pair of pairs) {
+          try {
+            const r = await axios.get('https://api.binance.com/api/v3/klines', {
+              params: { symbol: pair, interval, limit },
+              timeout: 8000
+            });
+            if (r.data && r.data.length > 0) {
+              chartData = r.data.map(k => ({ time: Math.floor(k[0] / 1000), price: parseFloat(k[4]) }));
+              console.log(`[chart] ${symbol} Binance (${pair}): ${chartData.length} nokta`);
+              break;
+            }
+          } catch (_) {}
+        }
+
+        if (chartData && chartData.length > 0) {
+          geckoChartCache[cacheKey] = { data: chartData, time: Date.now() };
+          return res.json(chartData);
         }
       } catch (e) {
-        console.log(`[chart] ${symbol} CoinCap hata:`, e.message);
+        console.log(`[chart] ${symbol} Binance hata:`, e.message);
         if (cached) return res.json(cached.data);
       }
     }
