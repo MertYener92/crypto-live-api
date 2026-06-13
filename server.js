@@ -22,6 +22,7 @@ let coinStats = {};
 let totalMarketCap = 0;
 let ws = null;
 const sparklineCache = {};
+const geckoChartCache = {}; // symbol_period → {data, time}
 
 let goldData = {
   xauusd: 0, usdtry: 0, gramTry: 0, change: 0, high24h: 0, low24h: 0,
@@ -506,12 +507,18 @@ app.get('/chart/:symbol', async (req, res) => {
 
     // Coinbase'de veri yoksa CoinGecko'dan dene
     const geckoId = meta?.geckoId;
-    console.log(`[chart] ${symbol} meta:`, meta ? `rank=${meta.rank} geckoId=${meta.geckoId}` : 'YOK');
     const geckoTarget = geckoId || null;
 
     if (true) { // geckoId olsun olmasın dene
+      const cacheKey = `${symbol}_${period}`;
+      const cached = geckoChartCache[cacheKey];
+      // 10 dakika cache
+      if (cached && Date.now() - cached.time < 10 * 60 * 1000) {
+        console.log(`[chart] ${symbol} cache'den döndürüldü`);
+        return res.json(cached.data);
+      }
+
       try {
-        // geckoId yoksa önce sembolden bul
         let resolvedId = geckoTarget;
         if (!resolvedId) {
           const searchRes = await axios.get(
@@ -535,15 +542,18 @@ app.get('/chart/:symbol', async (req, res) => {
           if (pricePoints.length > 0) {
             const chartData = pricePoints.map(p => ({ time: Math.floor(p[0] / 1000), price: p[1] }));
             console.log(`[chart] ${symbol} CoinGecko (${resolvedId}): ${chartData.length} nokta`);
-            // geckoId'yi cache'e yaz
-            if (!geckoTarget && coinMetadata[symbol]) {
-              coinMetadata[symbol].geckoId = resolvedId;
-            }
+            geckoChartCache[cacheKey] = { data: chartData, time: Date.now() };
+            if (!geckoTarget && coinMetadata[symbol]) coinMetadata[symbol].geckoId = resolvedId;
             return res.json(chartData);
           }
         }
       } catch (e) {
         console.log(`[chart] ${symbol} CoinGecko hata:`, e.message);
+        // Rate limit — cache'de eski veri varsa onu döndür
+        if (cached) {
+          console.log(`[chart] ${symbol} rate limit, eski cache döndürüldü`);
+          return res.json(cached.data);
+        }
       }
     }
 
