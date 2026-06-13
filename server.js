@@ -509,21 +509,20 @@ let newsLastFetch = 0;
 app.get('/news', async (req, res) => {
   try {
     const now = Date.now();
-    // 15 dakika cache
     if (newsCache && now - newsLastFetch < 15 * 60 * 1000) return res.json(newsCache);
 
-    // CryptoPanic ücretsiz API
+    // CoinGecko ücretsiz haber endpoint'i
     const response = await axios.get(
-      'https://cryptopanic.com/api/v1/posts/?auth_token=demo&public=true&kind=news',
+      'https://api.coingecko.com/api/v3/news',
       { timeout: 10000 }
     );
 
-    const results = (response.data.results || []).slice(0, 20).map(item => ({
+    const results = (response.data.data || []).slice(0, 20).map(item => ({
       title: item.title || '',
       url: item.url || '',
-      source: item.source?.title || '',
-      publishedAt: item.published_at || '',
-      currencies: (item.currencies || []).map(c => c.code || ''),
+      source: item.news_site || '',
+      publishedAt: item.updated_at ? new Date(item.updated_at * 1000).toISOString() : '',
+      currencies: [],
     }));
 
     newsCache = results;
@@ -531,8 +530,26 @@ app.get('/news', async (req, res) => {
     res.json(results);
   } catch (e) {
     console.log('News hata:', e.message);
+    // Fallback: RSS2JSON ücretsiz servis
+    try {
+      const rssResponse = await axios.get(
+        'https://api.rss2json.com/v1/api.json?rss_url=https://cointelegraph.com/rss',
+        { timeout: 10000 }
+      );
+      const items = (rssResponse.data.items || []).slice(0, 20).map(item => ({
+        title: item.title || '',
+        url: item.link || '',
+        source: 'CoinTelegraph',
+        publishedAt: item.pubDate || '',
+        currencies: [],
+      }));
+      newsCache = items;
+      newsLastFetch = now;
+      return res.json(items);
+    } catch (e2) {
+      console.log('News fallback hata:', e2.message);
+    }
     if (newsCache) return res.json(newsCache);
-    // Fallback boş liste
     res.json([]);
   }
 });
