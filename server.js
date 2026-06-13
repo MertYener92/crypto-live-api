@@ -587,14 +587,39 @@ app.get('/fund/chart/:code', async (req, res) => {
 
 app.get('/fund/comparison/:code', async (req, res) => {
   try {
-    const code = req.params.code.toUpperCase(); const periyod = req.query.periyod || '12';
+    const code = req.params.code.toUpperCase();
+    const periyod = parseInt(req.query.periyod || '12', 10); // integer olarak gönder
+    console.log(`[comparison] ${code} periyod=${periyod}`);
     const data = await fetchTefas('fonProfilDtyGetir', { fonKodu: code, dil: 'TR', periyod });
-    if (!data || data.faultCode) return res.status(404).json({ error: 'Veri yok' });
-    const items = data?.resultList || []; const fund = items.find(i => i.fonKodu === code);
-    const labelMap = { 'BIST100': 'BIST 100', 'BIST30': 'BIST 30', 'ALTIN': 'Altın', 'USD': 'USD/TL', 'EUR': 'EUR/TL', 'TUFE': 'TÜFE', 'MEVDUAT FAIZI': 'Mevduat' };
-    const benchmarks = items.filter(i => i.fonKodu !== code).map(i => ({ code: i.fonKodu, name: labelMap[i.fonKodu] || i.fonUnvan || i.fonKodu, return: Number((i.fonTurGetiri * 100).toFixed(2)) })).sort((a, b) => b.return - a.return);
-    res.json({ code, name: fund?.fonUnvan || code, fundType: fund?.fonTuru || '', fundReturn: fund ? Number((fund.fonTurGetiri * 100).toFixed(2)) : null, period: parseInt(periyod), benchmarks });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+    console.log(`[comparison] ${code} resultList length:`, data?.resultList?.length ?? 'null', 'faultCode:', data?.faultCode);
+    if (!data || data.faultCode) return res.status(404).json({ error: 'Veri yok', faultCode: data?.faultCode, raw: data });
+    const items = data?.resultList || [];
+    if (items.length === 0) return res.status(404).json({ error: 'Sonuç listesi boş', raw: data });
+    const fund = items.find(i => i.fonKodu === code);
+    const labelMap = {
+      'BIST100': 'BIST 100', 'BIST30': 'BIST 30', 'ALTIN': 'Altın',
+      'USD': 'Dolar', 'EUR': 'Euro', 'TUFE': 'TÜFE', 'MEVDUAT FAIZI': 'Mevduat Faizi',
+    };
+    const benchmarks = items
+      .filter(i => i.fonKodu !== code)
+      .map(i => ({
+        code: i.fonKodu,
+        name: labelMap[i.fonKodu] || i.fonUnvan || i.fonKodu,
+        return: Number(((i.fonTurGetiri ?? 0) * 100).toFixed(2)),
+      }))
+      .sort((a, b) => b.return - a.return);
+    res.json({
+      code,
+      name: fund?.fonUnvan || code,
+      fundType: fund?.fonTuru || '',
+      fundReturn: fund ? Number(((fund.fonTurGetiri ?? 0) * 100).toFixed(2)) : null,
+      period: periyod,
+      benchmarks,
+    });
+  } catch (e) {
+    console.log('[comparison] hata:', e.message);
+    res.status(500).json({ error: e.message });
+  }
 });
 
 app.get('/fund/returns/:code', async (req, res) => {
