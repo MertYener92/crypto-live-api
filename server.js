@@ -480,14 +480,52 @@ app.get('/chart/:symbol', async (req, res) => {
   try {
     const symbol = req.params.symbol.toUpperCase();
     if (GOLD_SYMBOLS.has(symbol)) return res.redirect(`/chart/gold/${symbol}?${new URLSearchParams(req.query).toString()}`);
-    const period = req.query.period || '1D'; const config = getChartConfig(period);
-    const endMs = Date.now(); const startMs = endMs - config.days * 24 * 60 * 60 * 1000;
+
+    // BES fonu ise chart yok
+    const meta = coinMetadata[symbol];
+    const period = req.query.period || '1D';
+    const config = getChartConfig(period);
+    const endMs = Date.now();
+    const startMs = endMs - config.days * 24 * 60 * 60 * 1000;
+    const mode = req.query.mode || 'line';
+
+    // Önce Coinbase dene
     const candles = await fetchCandles(symbol, startMs, endMs, config.granularity);
-    if (!candles || candles.length === 0) return res.status(404).json({ error: 'No candle data found' });
-    const mode = req.query.mode || 'line'; let chartData;
-    if (mode === 'candle') { chartData = candles.map(c => ({ time: c[0], open: c[3], high: c[2], low: c[1], close: c[4], volume: c[5] })).sort((a, b) => a.time - b.time).filter((item, i, arr) => i === 0 || item.time !== arr[i - 1].time); }
-    else { chartData = candles.map(c => ({ time: c[0], price: c[4] })).sort((a, b) => a.time - b.time).filter((item, i, arr) => i === 0 || item.time !== arr[i - 1].time); }
-    res.json(chartData);
+
+    if (candles && candles.length > 0) {
+      let chartData;
+      if (mode === 'candle') {
+        chartData = candles.map(c => ({ time: c[0], open: c[3], high: c[2], low: c[1], close: c[4], volume: c[5] }))
+          .sort((a, b) => a.time - b.time).filter((item, i, arr) => i === 0 || item.time !== arr[i - 1].time);
+      } else {
+        chartData = candles.map(c => ({ time: c[0], price: c[4] }))
+          .sort((a, b) => a.time - b.time).filter((item, i, arr) => i === 0 || item.time !== arr[i - 1].time);
+      }
+      return res.json(chartData);
+    }
+
+    // Coinbase'de veri yoksa CoinGecko'dan dene
+    const geckoId = meta?.geckoId;
+    if (geckoId) {
+      try {
+        const daysMap = { '1D': 1, '1M': 30, '3M': 90, '6M': 180, '1Y': 365, '5Y': 1825 };
+        const days = daysMap[period] || 1;
+        const response = await axios.get(
+          `https://api.coingecko.com/api/v3/coins/${geckoId}/market_chart`,
+          { params: { vs_currency: 'usd', days, interval: days <= 1 ? 'hourly' : 'daily' }, timeout: 10000 }
+        );
+        const prices = response.data?.prices || [];
+        if (prices.length > 0) {
+          const chartData = prices.map(p => ({ time: Math.floor(p[0] / 1000), price: p[1] }));
+          console.log(`[chart] ${symbol} CoinGecko fallback: ${chartData.length} nokta`);
+          return res.json(chartData);
+        }
+      } catch (e) {
+        console.log(`[chart] ${symbol} CoinGecko hata:`, e.message);
+      }
+    }
+
+    return res.status(404).json({ error: 'No candle data found' });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
