@@ -502,7 +502,42 @@ app.get('/fng', async (req, res) => {
   } catch (e) { if (fngCache) return res.json(fngCache); res.status(500).json({ error: e.message }); }
 });
 
-let prefetchRunning = false;
+// ── HABERLER ─────────────────────────────────────────────────────────────────
+let newsCache = null;
+let newsLastFetch = 0;
+
+app.get('/news', async (req, res) => {
+  try {
+    const now = Date.now();
+    // 15 dakika cache
+    if (newsCache && now - newsLastFetch < 15 * 60 * 1000) return res.json(newsCache);
+
+    // CryptoPanic ücretsiz API
+    const response = await axios.get(
+      'https://cryptopanic.com/api/v1/posts/?auth_token=demo&public=true&kind=news',
+      { timeout: 10000 }
+    );
+
+    const results = (response.data.results || []).slice(0, 20).map(item => ({
+      title: item.title || '',
+      url: item.url || '',
+      source: item.source?.title || '',
+      publishedAt: item.published_at || '',
+      currencies: (item.currencies || []).map(c => c.code || ''),
+    }));
+
+    newsCache = results;
+    newsLastFetch = now;
+    res.json(results);
+  } catch (e) {
+    console.log('News hata:', e.message);
+    if (newsCache) return res.json(newsCache);
+    // Fallback boş liste
+    res.json([]);
+  }
+});
+
+
 app.get('/prefetch-descriptions', async (req, res) => {
   if (prefetchRunning) return res.json({ status: 'already_running' });
   let coins = [];
@@ -532,18 +567,48 @@ app.get('/prefetch-descriptions', async (req, res) => {
 
 function formatTefasDate(date) { const y = date.getFullYear(); const m = (date.getMonth() + 1).toString().padStart(2, '0'); const d = date.getDate().toString().padStart(2, '0'); return `${y}-${m}-${d}`; }
 
-async function fetchTefas(endpoint, params) {
-  const response = await axios.post(`https://www.tefas.gov.tr/api/funds/${endpoint}`, params, { timeout: 15000, headers: { 'Accept': 'application/json, text/plain, */*', 'Accept-Language': 'tr-TR,tr;q=0.9', 'Content-Type': 'application/json', 'Origin': 'https://www.tefas.gov.tr', 'Referer': 'https://www.tefas.gov.tr/', 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' } });
-  return response.data;
+async function fetchTefas(endpoint, params, retries = 2) {
+  const headers = {
+    'Accept': 'application/json, text/plain, */*',
+    'Accept-Language': 'tr-TR,tr;q=0.9',
+    'Content-Type': 'application/json',
+    'Origin': 'https://www.tefas.gov.tr',
+    'Referer': 'https://www.tefas.gov.tr/',
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+  };
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const response = await axios.post(
+        `https://www.tefas.gov.tr/api/funds/${endpoint}`,
+        params,
+        { timeout: 30000, headers }
+      );
+      return response.data;
+    } catch (e) {
+      const isLast = attempt === retries;
+      console.log(`fetchTefas ${endpoint} attempt ${attempt + 1} hata: ${e.message}${isLast ? ' (son deneme)' : ', tekrar deneniyor...'}`);
+      if (isLast) throw e;
+      await new Promise(r => setTimeout(r, 2000 * (attempt + 1)));
+    }
+  }
 }
 
+// Bellek cache — fund/price için
+const fundPriceMemCache = {};
+
 app.get('/fund/price/:code', async (req, res) => {
+  const code = req.params.code.toUpperCase();
   try {
-    const code = req.params.code.toUpperCase();
     const priceData = await fetchTefas('fonFiyatBilgiGetir', { fonKodu: code, dil: 'TR', periyod: 1 });
-    if (!priceData || priceData.faultCode) return res.status(404).json({ error: 'Fon bulunamadı', raw: priceData });
+    if (!priceData || priceData.faultCode) {
+      if (fundPriceMemCache[code]) return res.json(fundPriceMemCache[code]);
+      return res.status(404).json({ error: 'Fon bulunamadı', raw: priceData });
+    }
     const items = priceData?.resultList || priceData?.data || priceData?.fiyatlar || (Array.isArray(priceData) ? priceData : null);
-    if (!items?.length) return res.status(404).json({ error: 'Fiyat yok', raw: priceData });
+    if (!items?.length) {
+      if (fundPriceMemCache[code]) return res.json(fundPriceMemCache[code]);
+      return res.status(404).json({ error: 'Fiyat yok', raw: priceData });
+    }
     const latest = items[items.length - 1]; const prev = items.length > 1 ? items[items.length - 2] : null;
     const price = parseFloat(String(latest.fiyat || latest.FIYAT || latest.birimPayDegeri || 0).replace(',', '.'));
     const prevP = prev ? parseFloat(String(prev.fiyat || prev.FIYAT || prev.birimPayDegeri || price).replace(',', '.')) : price;
@@ -555,10 +620,28 @@ app.get('/fund/price/:code', async (req, res) => {
       console.log(`[fund/price] ${code} detay keys:`, Object.keys(detay).join(', '));
       totalValue = parseFloat(String(detay.portBuyukluk || detay.portfoyBuyuklugu || detay.PORTFOYBUYUKLUGU || 0).replace(',', '.')) || 0;
       investorCount = parseInt(detay.yatirimciSayi || detay.kisiSayisi || detay.KISISAYISI || 0) || 0;
-      kategoriDerece = parseInt(detay.kategoriDerece || 0) || 0; kategoriFonSay = parseInt(detay.kategoriFonSay || 0) || 0; fonKategori = detay.fonKategori || '';
+      kategoriDerece = parseInt(detay.kategoriDerece || 0) || 0;
+      kategoriFonSay = parseInt(detay.kategoriFonSay || 0) || 0;
+      fonKategori = detay.fonKategori || '';
     } catch (e2) { console.log(`[fund/price] ${code} detay hata:`, e2.message); }
-    res.json({ code, name: latest.fonUnvan || priceData.fonUnvani || latest.FONUNVAN || code, price, change: Number(change.toFixed(4)), date: latest.tarih || latest.TARIH || latest.date, totalValue, investorCount, kategoriDerece, kategoriFonSay, fonKategori });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+
+    const result = {
+      code,
+      name: latest.fonUnvan || priceData.fonUnvani || latest.FONUNVAN || code,
+      price, change: Number(change.toFixed(4)),
+      date: latest.tarih || latest.TARIH || latest.date,
+      totalValue, investorCount, kategoriDerece, kategoriFonSay, fonKategori,
+    };
+    fundPriceMemCache[code] = result; // cache'e kaydet
+    res.json(result);
+  } catch (e) {
+    console.log(`[fund/price] ${code} hata:`, e.message);
+    if (fundPriceMemCache[code]) {
+      console.log(`[fund/price] ${code} cache'den döndürüldü`);
+      return res.json(fundPriceMemCache[code]);
+    }
+    res.status(500).json({ error: e.message });
+  }
 });
 
 app.get('/fund/debug/:code', async (req, res) => {
@@ -585,16 +668,29 @@ app.get('/fund/chart/:code', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// Bellek içi cache — TEFAS çöktüğünde son başarılı yanıtı döndür
+const comparisonMemCache = {};
+
 app.get('/fund/comparison/:code', async (req, res) => {
+  const code = req.params.code.toUpperCase();
+  const periyod = parseInt(req.query.periyod || '12', 10);
+  const cacheKey = `${code}_${periyod}`;
+  console.log(`[comparison] ${code} periyod=${periyod}`);
+
   try {
-    const code = req.params.code.toUpperCase();
-    const periyod = parseInt(req.query.periyod || '12', 10); // integer olarak gönder
-    console.log(`[comparison] ${code} periyod=${periyod}`);
     const data = await fetchTefas('fonProfilDtyGetir', { fonKodu: code, dil: 'TR', periyod });
-    console.log(`[comparison] ${code} resultList length:`, data?.resultList?.length ?? 'null', 'faultCode:', data?.faultCode);
-    if (!data || data.faultCode) return res.status(404).json({ error: 'Veri yok', faultCode: data?.faultCode, raw: data });
-    const items = data?.resultList || [];
-    if (items.length === 0) return res.status(404).json({ error: 'Sonuç listesi boş', raw: data });
+    console.log(`[comparison] ${code} resultList:`, data?.resultList?.length ?? 'null', 'faultCode:', data?.faultCode);
+
+    if (!data || data.faultCode || !data?.resultList?.length) {
+      // TEFAS hata verdi — cache'den dön
+      if (comparisonMemCache[cacheKey]) {
+        console.log(`[comparison] ${code} cache'den döndürüldü`);
+        return res.json(comparisonMemCache[cacheKey]);
+      }
+      return res.status(404).json({ error: 'Veri yok', faultCode: data?.faultCode });
+    }
+
+    const items = data.resultList;
     const fund = items.find(i => i.fonKodu === code);
     const labelMap = {
       'BIST100': 'BIST 100', 'BIST30': 'BIST 30', 'ALTIN': 'Altın',
@@ -608,16 +704,27 @@ app.get('/fund/comparison/:code', async (req, res) => {
         return: Number(((i.fonTurGetiri ?? 0) * 100).toFixed(2)),
       }))
       .sort((a, b) => b.return - a.return);
-    res.json({
+
+    const result = {
       code,
       name: fund?.fonUnvan || code,
       fundType: fund?.fonTuru || '',
       fundReturn: fund ? Number(((fund.fonTurGetiri ?? 0) * 100).toFixed(2)) : null,
       period: periyod,
       benchmarks,
-    });
+    };
+
+    // Başarılı sonucu cache'e kaydet
+    comparisonMemCache[cacheKey] = result;
+    res.json(result);
+
   } catch (e) {
     console.log('[comparison] hata:', e.message);
+    // TEFAS timeout/hata — cache'den dön
+    if (comparisonMemCache[cacheKey]) {
+      console.log(`[comparison] ${code} hata sonrası cache'den döndürüldü`);
+      return res.json(comparisonMemCache[cacheKey]);
+    }
     res.status(500).json({ error: e.message });
   }
 });
