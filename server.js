@@ -506,19 +506,40 @@ app.get('/chart/:symbol', async (req, res) => {
 
     // Coinbase'de veri yoksa CoinGecko'dan dene
     const geckoId = meta?.geckoId;
-    if (geckoId) {
+    const geckoTarget = geckoId || null;
+
+    if (geckoTarget || !meta) {
       try {
-        const daysMap = { '1D': 1, '1M': 30, '3M': 90, '6M': 180, '1Y': 365, '5Y': 1825 };
-        const days = daysMap[period] || 1;
-        const response = await axios.get(
-          `https://api.coingecko.com/api/v3/coins/${geckoId}/market_chart`,
-          { params: { vs_currency: 'usd', days, interval: days <= 1 ? 'hourly' : 'daily' }, timeout: 10000 }
-        );
-        const prices = response.data?.prices || [];
-        if (prices.length > 0) {
-          const chartData = prices.map(p => ({ time: Math.floor(p[0] / 1000), price: p[1] }));
-          console.log(`[chart] ${symbol} CoinGecko fallback: ${chartData.length} nokta`);
-          return res.json(chartData);
+        // geckoId yoksa önce sembolden bul
+        let resolvedId = geckoTarget;
+        if (!resolvedId) {
+          const searchRes = await axios.get(
+            `https://api.coingecko.com/api/v3/search?query=${symbol}`,
+            { timeout: 8000 }
+          );
+          const coin = (searchRes.data?.coins || []).find(c =>
+            c.symbol.toUpperCase() === symbol
+          );
+          resolvedId = coin?.id;
+        }
+
+        if (resolvedId) {
+          const daysMap = { '1D': 1, '1M': 30, '3M': 90, '6M': 180, '1Y': 365, '5Y': 1825 };
+          const days = daysMap[period] || 1;
+          const response = await axios.get(
+            `https://api.coingecko.com/api/v3/coins/${resolvedId}/market_chart`,
+            { params: { vs_currency: 'usd', days, interval: days <= 1 ? 'hourly' : 'daily' }, timeout: 10000 }
+          );
+          const pricePoints = response.data?.prices || [];
+          if (pricePoints.length > 0) {
+            const chartData = pricePoints.map(p => ({ time: Math.floor(p[0] / 1000), price: p[1] }));
+            console.log(`[chart] ${symbol} CoinGecko (${resolvedId}): ${chartData.length} nokta`);
+            // geckoId'yi cache'e yaz
+            if (!geckoTarget && coinMetadata[symbol]) {
+              coinMetadata[symbol].geckoId = resolvedId;
+            }
+            return res.json(chartData);
+          }
         }
       } catch (e) {
         console.log(`[chart] ${symbol} CoinGecko hata:`, e.message);
