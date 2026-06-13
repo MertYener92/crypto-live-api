@@ -509,51 +509,49 @@ app.get('/chart/:symbol', async (req, res) => {
     const geckoId = meta?.geckoId;
     const geckoTarget = geckoId || null;
 
-    if (true) { // geckoId olsun olmasın dene
+    if (true) {
       const cacheKey = `${symbol}_${period}`;
       const cached = geckoChartCache[cacheKey];
-      // 10 dakika cache
       if (cached && Date.now() - cached.time < 10 * 60 * 1000) {
-        console.log(`[chart] ${symbol} cache'den döndürüldü`);
         return res.json(cached.data);
       }
 
       try {
-        let resolvedId = geckoTarget;
-        if (!resolvedId) {
-          const searchRes = await axios.get(
-            `https://api.coingecko.com/api/v3/search?query=${symbol}`,
-            { timeout: 8000 }
-          );
-          const coin = (searchRes.data?.coins || []).find(c =>
-            c.symbol.toUpperCase() === symbol
-          );
-          resolvedId = coin?.id;
-        }
+        const daysMap = { '1D': 1, '1M': 30, '3M': 90, '6M': 180, '1Y': 365, '5Y': 1825 };
+        const days = daysMap[period] || 1;
+        const intervalMap = { '1D': 'm5', '1M': 'h1', '3M': 'h6', '6M': 'h12', '1Y': 'd1', '5Y': 'd1' };
+        const interval = intervalMap[period] || 'm5';
+        const endTime = Date.now();
+        const startTime = endTime - days * 24 * 60 * 60 * 1000;
 
-        if (resolvedId) {
-          const daysMap = { '1D': 1, '1M': 30, '3M': 90, '6M': 180, '1Y': 365, '5Y': 1825 };
-          const days = daysMap[period] || 1;
-          const response = await axios.get(
-            `https://api.coingecko.com/api/v3/coins/${resolvedId}/market_chart`,
-            { params: { vs_currency: 'usd', days, interval: days <= 1 ? 'hourly' : 'daily' }, timeout: 10000 }
+        // CoinCap'te asset ID bul
+        const searchRes = await axios.get(
+          `https://api.coincap.io/v2/assets?search=${symbol}&limit=5`,
+          { timeout: 8000 }
+        );
+        const asset = (searchRes.data?.data || []).find(a =>
+          a.symbol.toUpperCase() === symbol
+        );
+
+        if (asset?.id) {
+          const histRes = await axios.get(
+            `https://api.coincap.io/v2/assets/${asset.id}/history`,
+            { params: { interval, start: startTime, end: endTime }, timeout: 10000 }
           );
-          const pricePoints = response.data?.prices || [];
-          if (pricePoints.length > 0) {
-            const chartData = pricePoints.map(p => ({ time: Math.floor(p[0] / 1000), price: p[1] }));
-            console.log(`[chart] ${symbol} CoinGecko (${resolvedId}): ${chartData.length} nokta`);
+          const points = histRes.data?.data || [];
+          if (points.length > 0) {
+            const chartData = points.map(p => ({
+              time: Math.floor(p.time / 1000),
+              price: parseFloat(p.priceUsd)
+            }));
+            console.log(`[chart] ${symbol} CoinCap (${asset.id}): ${chartData.length} nokta`);
             geckoChartCache[cacheKey] = { data: chartData, time: Date.now() };
-            if (!geckoTarget && coinMetadata[symbol]) coinMetadata[symbol].geckoId = resolvedId;
             return res.json(chartData);
           }
         }
       } catch (e) {
-        console.log(`[chart] ${symbol} CoinGecko hata:`, e.message);
-        // Rate limit — cache'de eski veri varsa onu döndür
-        if (cached) {
-          console.log(`[chart] ${symbol} rate limit, eski cache döndürüldü`);
-          return res.json(cached.data);
-        }
+        console.log(`[chart] ${symbol} CoinCap hata:`, e.message);
+        if (cached) return res.json(cached.data);
       }
     }
 
