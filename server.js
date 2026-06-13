@@ -365,6 +365,21 @@ async function loadGlobalStats() {
   } catch (e) { console.log('Global Stats Error:', e.message); }
 }
 
+// Fiyat geçmişi — Coinbase'de olmayan coinler için
+const priceHistory = {}; // symbol → [{time, price}]
+const HISTORY_MAX = 1440; // max 24 saat (dakikalık)
+
+function recordPrice(symbol, price) {
+  if (!priceHistory[symbol]) priceHistory[symbol] = [];
+  const now = Math.floor(Date.now() / 1000);
+  const hist = priceHistory[symbol];
+  // Son kayıttan 60 saniye geçmişse ekle
+  if (hist.length === 0 || now - hist[hist.length - 1].time >= 60) {
+    hist.push({ time: now, price });
+    if (hist.length > HISTORY_MAX) hist.shift();
+  }
+}
+
 function startWebSocket() {
   if (ws) ws.close();
   ws = new WebSocket('wss://ws-feed.exchange.coinbase.com', { perMessageDeflate: false });
@@ -476,6 +491,29 @@ async function fetchCandles(symbol, startMs, endMs, granularity) {
 }
 
 const GOLD_SYMBOLS = new Set(['ALTIN', 'XAUUSD', 'CEYREK_YENI', 'YARIM_YENI', 'TEK_YENI', 'CUM_ALTIN', 'ATA_ALTIN', 'RESAT_ALTIN', 'GUMUS', 'PLATIN', 'PALADYUM']);
+
+// Hangi coinlerde chart yok — hızlı tarama
+app.get('/debug/no-chart', async (req, res) => {
+  const cryptoSymbols = Object.keys(prices).filter(s => !GOLD_SYMBOLS.has(s));
+  const noChart = [];
+  const hasChart = [];
+  const endMs = Date.now();
+  const startMs = endMs - 24 * 60 * 60 * 1000;
+
+  for (const symbol of cryptoSymbols) {
+    try {
+      const r = await axios.get(
+        `https://api.exchange.coinbase.com/products/${symbol}-USD/candles`,
+        { params: { start: new Date(startMs).toISOString(), end: new Date(endMs).toISOString(), granularity: 3600 }, timeout: 4000 }
+      );
+      if (r.data && r.data.length > 0) hasChart.push(symbol);
+      else noChart.push(symbol);
+    } catch (e) {
+      noChart.push(symbol);
+    }
+  }
+  res.json({ total: cryptoSymbols.length, hasChart: hasChart.length, noChart: noChart.length, noChartSymbols: noChart.sort() });
+});
 
 app.get('/chart/:symbol', async (req, res) => {
   try {
