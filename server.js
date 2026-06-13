@@ -502,58 +502,198 @@ app.get('/fng', async (req, res) => {
   } catch (e) { if (fngCache) return res.json(fngCache); res.status(500).json({ error: e.message }); }
 });
 
-// ── HABERLER ─────────────────────────────────────────────────────────────────
-let newsCache = null;
-let newsLastFetch = 0;
+// ── HABERLER — 4 Kategori ────────────────────────────────────────────────────
+const newsCache4 = { kripto: null, borsa: null, altin: null, bes: null };
+const newsFetchTime4 = { kripto: 0, borsa: 0, altin: 0, bes: 0 };
+const newsSummaryCache = {};
+const NEWS_TTL = 15 * 60 * 1000;
 
-app.get('/news', async (req, res) => {
+async function fetchRSS(url) {
+  const r = await axios.get(
+    `https://api.rss2json.com/v1/api.json?rss_url=${encodeURIComponent(url)}&count=15`,
+    { timeout: 12000 }
+  );
+  return (r.data?.items || []).map(item => ({
+    title: item.title?.trim() || '',
+    url: item.link || '',
+    source: r.data?.feed?.title || '',
+    publishedAt: item.pubDate || '',
+    description: (item.description || item.content || '')
+      .replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 400),
+  })).filter(i => i.title);
+}
+
+async function fetchKriptoNews() {
+  const sources = [
+    'https://btchaber.com/feed',
+    'https://www.kriptofoni.com/feed',
+    'https://coinotag.com/rss.xml',
+  ];
+  const all = [];
+  for (const url of sources) {
+    try { all.push(...await fetchRSS(url)); } catch (_) {}
+  }
+  const seen = new Set();
+  return all
+    .filter(i => { if (seen.has(i.title)) return false; seen.add(i.title); return true; })
+    .sort((a, b) => new Date(b.publishedAt) - new Date(a.publishedAt))
+    .slice(0, 20);
+}
+
+async function fetchBorsaNews() {
+  const sources = [
+    'https://www.bloomberght.com/rss',
+    'https://www.ekonomim.com/rss',
+    'https://www.dunya.com/rss',
+  ];
+  const all = [];
+  for (const url of sources) {
+    try { all.push(...await fetchRSS(url)); } catch (_) {}
+  }
+  const seen = new Set();
+  return all
+    .filter(i => { if (seen.has(i.title)) return false; seen.add(i.title); return true; })
+    .sort((a, b) => new Date(b.publishedAt) - new Date(a.publishedAt))
+    .slice(0, 20);
+}
+
+async function fetchAltinNews() {
+  const sources = [
+    'https://www.bloomberght.com/rss/altin',
+    'https://www.bloomberght.com/rss',
+  ];
+  const all = [];
+  for (const url of sources) {
+    try {
+      const items = await fetchRSS(url);
+      const filtered = items.filter(i =>
+        /altın|gold|xau|gümüş|silver|platin|gram|ons|döviz|kur|dolar|euro/i.test(i.title)
+      );
+      all.push(...(filtered.length > 0 ? filtered : items.slice(0, 5)));
+    } catch (_) {}
+  }
+  const seen = new Set();
+  return all
+    .filter(i => { if (seen.has(i.title)) return false; seen.add(i.title); return true; })
+    .sort((a, b) => new Date(b.publishedAt) - new Date(a.publishedAt))
+    .slice(0, 20);
+}
+
+async function fetchBesNews() {
   try {
-    const now = Date.now();
-    if (newsCache && now - newsLastFetch < 15 * 60 * 1000) return res.json(newsCache);
-
-    // CoinGecko ücretsiz haber endpoint'i
-    const response = await axios.get(
-      'https://api.coingecko.com/api/v3/news',
-      { timeout: 10000 }
+    const start = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+    const r = await axios.get(
+      `${SUPABASE_URL}/rest/v1/fund_prices?select=symbol,price,change,date&date=gte.${start}&order=change.desc&limit=200`,
+      { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` }, timeout: 10000 }
     );
+    const rows = r.data || [];
+    const latest = {};
+    for (const row of rows) {
+      if (!latest[row.symbol] || row.date > latest[row.symbol].date) latest[row.symbol] = row;
+    }
+    const topFunds = Object.values(latest).sort((a, b) => b.change - a.change).slice(0, 10);
+    if (topFunds.length === 0) return [];
 
-    const results = (response.data.data || []).slice(0, 20).map(item => ({
-      title: item.title || '',
-      url: item.url || '',
-      source: item.news_site || '',
-      publishedAt: item.updated_at ? new Date(item.updated_at * 1000).toISOString() : '',
-      currencies: [],
+    const items = topFunds.map((fund, i) => ({
+      title: `${i + 1}. ${fund.symbol} — Son 30 günde %${Number(fund.change).toFixed(2)} getiri`,
+      url: 'https://www.tefas.gov.tr/BESSorgu.aspx',
+      source: 'TEFAS Analiz',
+      publishedAt: fund.date ? new Date(fund.date).toISOString() : new Date().toISOString(),
+      description: `${fund.symbol} kodu ile işlem gören BES fonu son 30 günde %${Number(fund.change).toFixed(2)} getiri sağladı. Güncel birim fiyat: ₺${Number(fund.price).toFixed(4)}`,
     }));
 
-    newsCache = results;
-    newsLastFetch = now;
-    res.json(results);
+    items.unshift({
+      title: '📊 Son 30 Günde En Çok Kazandıran 10 BES Fonu',
+      url: 'https://www.tefas.gov.tr/BESSorgu.aspx',
+      source: 'TEFAS Analiz',
+      publishedAt: new Date().toISOString(),
+      description: `En iyi BES fonu: ${topFunds[0]?.symbol} (%${Number(topFunds[0]?.change).toFixed(2)}). Veriler TEFAS kaynaklıdır.`,
+    });
+    return items;
   } catch (e) {
-    console.log('News hata:', e.message);
-    // Fallback: RSS2JSON ücretsiz servis
-    try {
-      const rssResponse = await axios.get(
-        'https://api.rss2json.com/v1/api.json?rss_url=https://cointelegraph.com/rss',
-        { timeout: 10000 }
-      );
-      const items = (rssResponse.data.items || []).slice(0, 20).map(item => ({
-        title: item.title || '',
-        url: item.link || '',
-        source: 'CoinTelegraph',
-        publishedAt: item.pubDate || '',
-        currencies: [],
-      }));
-      newsCache = items;
-      newsLastFetch = now;
-      return res.json(items);
-    } catch (e2) {
-      console.log('News fallback hata:', e2.message);
-    }
-    if (newsCache) return res.json(newsCache);
+    console.log('BES news hata:', e.message);
+    return [];
+  }
+}
+
+app.get('/news/:category', async (req, res) => {
+  const cat = req.params.category;
+  if (!['kripto', 'borsa', 'altin', 'bes'].includes(cat))
+    return res.status(400).json({ error: 'Geçersiz kategori' });
+
+  const now = Date.now();
+  if (newsCache4[cat] && now - newsFetchTime4[cat] < NEWS_TTL)
+    return res.json(newsCache4[cat]);
+
+  try {
+    let items = [];
+    if (cat === 'kripto') items = await fetchKriptoNews();
+    else if (cat === 'borsa') items = await fetchBorsaNews();
+    else if (cat === 'altin') items = await fetchAltinNews();
+    else if (cat === 'bes') items = await fetchBesNews();
+
+    newsCache4[cat] = items;
+    newsFetchTime4[cat] = now;
+    res.json(items);
+  } catch (e) {
+    console.log(`News ${cat} hata:`, e.message);
+    if (newsCache4[cat]) return res.json(newsCache4[cat]);
     res.json([]);
   }
 });
 
+app.get('/news/summary', async (req, res) => {
+  const title = req.query.title || '';
+  const description = req.query.description || '';
+  const url = req.query.url || '';
+  if (!title) return res.status(400).json({ error: 'title gerekli' });
+
+  const cacheKey = title.slice(0, 80);
+  if (newsSummaryCache[cacheKey]) return res.json(newsSummaryCache[cacheKey]);
+
+  try {
+    let fullContent = description;
+    if (url && !url.includes('tefas.gov.tr')) {
+      try {
+        const pageRes = await axios.get(url, {
+          timeout: 8000,
+          headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
+        });
+        const text = pageRes.data
+          .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+          .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+          .replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 2000);
+        if (text.length > fullContent.length) fullContent = text;
+      } catch (_) {}
+    }
+
+    if (!ANTHROPIC_API_KEY || fullContent.length < 30) {
+      const result = { title, summary: description || 'İçerik yüklenemedi.' };
+      newsSummaryCache[cacheKey] = result;
+      return res.json(result);
+    }
+
+    const claudeRes = await axios.post(
+      'https://api.anthropic.com/v1/messages',
+      {
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 250,
+        messages: [{ role: 'user', content: `Aşağıdaki haberi 2-3 cümleyle Türkçe özetle. Sadece özeti yaz.\n\nBaşlık: ${title}\n\nİçerik: ${fullContent.slice(0, 1500)}` }]
+      },
+      { headers: { 'x-api-key': ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' }, timeout: 15000 }
+    );
+
+    const summary = claudeRes.data.content[0]?.text?.trim() || description || 'Özet yüklenemedi.';
+    const result = { title, summary };
+    newsSummaryCache[cacheKey] = result;
+    res.json(result);
+  } catch (e) {
+    console.log('News summary hata:', e.message);
+    const result = { title, summary: description || 'Özet yüklenemedi.' };
+    newsSummaryCache[cacheKey] = result;
+    res.json(result);
+  }
+});
 
 app.get('/prefetch-descriptions', async (req, res) => {
   if (prefetchRunning) return res.json({ status: 'already_running' });
