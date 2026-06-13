@@ -284,7 +284,14 @@ async function loadMetadataFromSupabase() {
     console.log('Supabase assets yukleniyor...');
     const response = await axios.get(`${SUPABASE_URL}/rest/v1/assets?select=*`, { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` }, timeout: 10000 });
     if (response.data && response.data.length > 0) {
-      response.data.forEach(row => { coinMetadata[row.symbol] = { symbol: row.symbol, name: row.name || row.symbol, logo: row.logo_url || '', geckoId: row.gecko_id || '', rank: 9999, marketCap: 0 }; });
+      response.data.forEach(row => {
+        // Fon kaydı kripto sembolünü ezmemeli
+        const type = (row.type || '').toLowerCase();
+        if (type === 'fund' && coinMetadata[row.symbol]) return;
+        // Fon adı crypto sembolüne yazılmasın
+        if (type === 'fund') return;
+        coinMetadata[row.symbol] = { symbol: row.symbol, name: row.name || row.symbol, logo: row.logo_url || '', geckoId: row.gecko_id || '', rank: 9999, marketCap: 0 };
+      });
       console.log(`Supabase assets: ${response.data.length} coin yuklendi`); return true;
     }
     return false;
